@@ -398,7 +398,7 @@ wheels = [
 [[package]]
 name = "hive-web-runtime"
 version = "0.1.0"
-source = { git = "https://github.com/YegorMy/hive-web.git#088ee2fa5169f5fa91e9b145c2c8a2fc355b4649" }
+source = { git = "https://github.com/YegorMy/hive-web.git#a46ae7061775ec8dd5890b8ce2190d53430c6f76" }
 dependencies = [
     { name = "httpx" },
     { name = "mcp" },
