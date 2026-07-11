@@ -33,9 +33,16 @@ Marketplace MCP намеренно работает только на чтени
 
 Цены — это scraped snapshots. Перед покупкой всегда открывайте исходную ссылку и проверяйте карточку товара.
 
+Marketplace MCP по умолчанию использует Hive Web как источник загрузки страниц (`MARKETPLACES_WEB_BACKEND=hive_web`).
+Режим `legacy` оставляет прежний путь через Playwright/httpx.
+Режим `auto` сначала пробует Hive Web, и использует legacy только если Hive Web недоступен.
+
+- `MARKETPLACES_WEB_BACKEND`: `hive_web` (по умолчанию), `auto`, `legacy`
+- `MARKETPLACES_HIVE_WEB_MAX_TOKENS`: максимальный размер снапшота видимого текста (по умолчанию `12000`)
+
 ## Требования
 
-- Python 3.10+
+- Python 3.11+
 - [`uv`](https://docs.astral.sh/uv/)
 - Hermes или другой MCP-клиент
 

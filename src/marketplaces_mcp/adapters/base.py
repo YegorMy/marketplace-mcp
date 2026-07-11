@@ -22,6 +22,9 @@ _BLOCKED_MARKERS = (
     "you are human",
     "подтвердите что вы человек",
     "check you are not a robot",
+    "похоже, нет соединения",
+    "выключите vpn",
+    "инцидент:",
 )
 
 
@@ -95,17 +98,48 @@ class BaseAdapter(ABC):
             warnings.append("FIXTURE_NOT_FOUND")
             return None, warnings
 
-        try:
-            html = await self._fetch_with_playwright(url)
+        if self.settings.web_backend in {"hive_web", "auto"}:
+            try:
+                html = await self._fetch_with_hive_web(url)
+                if html:
+                    return html, warnings
+            except Exception:
+                warnings.append("HIVE_WEB_FAILED")
+                if self.settings.web_backend == "hive_web":
+                    return None, warnings
+            else:
+                warnings.append("HIVE_WEB_FAILED")
+                if self.settings.web_backend == "hive_web":
+                    return None, warnings
+
+        if self.settings.web_backend in {"auto", "legacy"}:
+            try:
+                html = await self._fetch_with_playwright(url)
+                if html:
+                    return html, warnings
+            except Exception:
+                warnings.append("PLAYWRIGHT_FAILED")
+            html = await self._fetch_with_http(url)
             if html:
                 return html, warnings
-        except Exception:
-            warnings.append("PLAYWRIGHT_FAILED")
-        html = await self._fetch_with_http(url)
-        if html:
-            return html, warnings
         warnings.append("NO_FETCH")
         return None, warnings
+
+    async def _fetch_with_hive_web(self, url: str) -> str | None:
+        from hive_web_runtime.action_web.browser import ActionWebRuntime
+
+        runtime = ActionWebRuntime()
+        session_id: str | None = None
+        try:
+            session = await runtime.session_create(headless=True)
+            session_id = session.session_id
+            await runtime.navigate(session_id, url=url)
+            snapshot = await runtime.snapshot(session_id, max_tokens=self.settings.hive_web_max_tokens)
+            return snapshot.visible_text
+        finally:
+            if session_id is not None:
+                await runtime.close(session_id)
+            await runtime.shutdown()
 
     async def _fetch_with_http(self, url: str) -> str | None:
         headers = {

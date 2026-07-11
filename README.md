@@ -33,9 +33,16 @@ It does not:
 
 Prices are scraped snapshots. Always open the product URL before making a purchase decision.
 
+Marketplace MCP uses Hive Web as the default page loader (`MARKETPLACES_WEB_BACKEND=hive_web`).
+`legacy` mode keeps the previous Playwright/httpx loading stack.
+`auto` tries Hive Web first and falls back to legacy only if Hive Web is unavailable.
+
+- `MARKETPLACES_WEB_BACKEND`: `hive_web` (default), `auto`, `legacy`
+- `MARKETPLACES_HIVE_WEB_MAX_TOKENS`: maximum tokens for Hive Web text snapshot (default `12000`)
+
 ## Requirements
 
-- Python 3.10+
+- Python 3.11+
 - [`uv`](https://docs.astral.sh/uv/)
 - Hermes or another MCP client
 
