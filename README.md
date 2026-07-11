@@ -1,6 +1,6 @@
 # Marketplace MCP
 
-[Русская версия](readme_rus.md)
+Read in Russian: [readme_rus.md](readme_rus.md)
 
 Marketplace MCP is a read-only MCP server for product search and price comparison across Ozon and Yandex Market.
 

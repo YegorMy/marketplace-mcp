@@ -1,6 +1,6 @@
 # Marketplace MCP
 
-[English version](README.md)
+English README: [README.md](README.md)
 
 Marketplace MCP — read-only MCP-сервер для поиска товаров и сравнения цен в Ozon и Яндекс Маркете.
 
