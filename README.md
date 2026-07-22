@@ -2,7 +2,8 @@
 
 Read in Russian: [readme_rus.md](readme_rus.md)
 
-Marketplace MCP is a read-only MCP server for product search and price comparison across Ozon and Yandex Market.
+Marketplace MCP is a read-only MCP server for product search, review sampling,
+and price comparison across Ozon, Wildberries, Yandex Market, and Avito.
 
 It is built for agents that need marketplace data without logging in, touching carts, or automating checkout. The server returns normalized product data, comparison groups, warnings, and source URLs. When a marketplace blocks scraping or shows anti-bot behavior, the tool reports that instead of trying to bypass it.
 
@@ -10,20 +11,28 @@ It is built for agents that need marketplace data without logging in, touching c
 
 - `marketplaces_search` searches one or more marketplaces.
 - `ozon_search` searches Ozon only.
+- `wildberries_search` searches Wildberries only.
 - `yandex_market_search` searches Yandex Market only.
-- `marketplaces_compare` searches both marketplaces and groups similar products.
+- `avito_search` searches Avito as an explicit used-market path.
+- `marketplaces_compare` searches retail marketplaces and groups similar
+  products; Avito is opt-in with `include_avito=true`.
 - `marketplaces_product_details` reads a product page by URL.
+- `marketplaces_product_reviews` returns a compact review sample for supported
+  marketplaces.
 - `marketplaces_get_artifact` reads a saved result artifact.
 
-Returned product fields include marketplace, title, URL, image URL, price, old price, currency, rating, review count, availability, delivery notes, scraped timestamp, and warnings when data is partial.
+Returned product fields include marketplace, title, URL, image URL, price, old
+price, currency, rating, review count, availability, delivery notes, seller
+evidence, used-item condition and location, scraped timestamp, and warnings when
+data is partial.
 
 ## Safety model
 
 Marketplace MCP is deliberately read-only.
 
-It does not:
+By default it does not:
 
-- log in to Ozon or Yandex Market;
+- log in to a marketplace;
 - use cookies or account sessions;
 - add items to cart;
 - place orders;
@@ -39,6 +48,20 @@ Marketplace MCP uses Hive Web as the default page loader (`MARKETPLACES_WEB_BACK
 
 - `MARKETPLACES_WEB_BACKEND`: `hive_web` (default), `auto`, `legacy`
 - `MARKETPLACES_HIVE_WEB_MAX_TOKENS`: maximum tokens for Hive Web text snapshot (default `12000`)
+- `MARKETPLACES_CAMOFOX_URL`: optional Camofox base URL for anonymous ephemeral
+  read-only fallback sessions.
+- `MARKETPLACES_AVITO_REGION_SLUG`: Avito region path (default `all`).
+- `MARKETPLACES_AVITO_STATE_PATH`: shared Avito rate-limit state file.
+- `MARKETPLACES_AVITO_MIN_INTERVAL_SECONDS`: minimum interval between Avito live
+  requests (default `10`).
+- `MARKETPLACES_AVITO_BLOCK_COOLDOWN_SECONDS`: cooldown after an explicit Avito
+  IP block (default `21600`, six hours).
+
+When rendered pages are unavailable, public search-index discovery may return
+canonical product links. Such results always have no verified price and include
+`INDEX_DISCOVERY_ONLY` and `PRICE_UNVERIFIED`; an index snippet is never treated
+as current marketplace data. Avito is excluded from default retail search and
+comparison because each used listing is a unique physical item.
 
 ## Requirements
 
@@ -70,6 +93,12 @@ Run a live search smoke test:
 
 ```bash
 uv run python scripts/smoke-search.py --query "бумага a4" --limit 2
+```
+
+Run one explicit Avito canary without touching retail marketplaces:
+
+```bash
+uv run python scripts/live_canary.py --avito-only --avito-query "кроватка Stokke"
 ```
 
 Live search depends on current marketplace behavior. Ozon and Yandex Market may rate-limit, block, or change page markup. In that case the smoke test should return warnings such as `CAPTCHA_OR_BLOCKED` instead of crashing.
