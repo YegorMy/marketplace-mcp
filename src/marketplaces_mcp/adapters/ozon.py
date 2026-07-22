@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 
@@ -18,6 +18,36 @@ class OzonAdapter(BaseAdapter):
     search_url_template = "https://www.ozon.ru/search/?text={query}"
     discovery_domain = "ozon.ru/product"
     product_url_patterns = (r"https://(?:www\.)?ozon\.ru/product/[^/?#]+(?:-\d+)?/?$",)
+
+    async def product_details(
+        self,
+        url: str,
+        strategy: str = "auto",
+        fixture_html: str | None = None,
+    ) -> tuple[ProductResult | None, list[str], str]:
+        if strategy == "fixture":
+            return await super().product_details(url=url, strategy=strategy, fixture_html=fixture_html)
+
+        html, warnings = await self._load_html(
+            query=url,
+            url=url,
+            strategy=strategy,
+            fixture_html=fixture_html,
+        )
+        if html and not self._is_blocked(html):
+            product = self.parse_product_details(html, url=url)
+            if product is not None:
+                return product, sorted(set(warnings)), url
+            warnings.append("OZON_DETAILS_DIRECT_NO_RESULTS")
+        elif html:
+            warnings.append("CAPTCHA_OR_BLOCKED")
+
+        recovered, recovery_warnings = await self._details_from_search_result(url, strategy=strategy)
+        if recovered is not None:
+            return recovered, sorted(set(warnings + recovery_warnings)), url
+
+        fallback, fallback_warnings = await self._details_with_camofox(url)
+        return fallback, sorted(set(warnings + recovery_warnings + fallback_warnings)), url
 
     def parse_search_results(self, html: str, query: str) -> list[ProductResult]:
         if "/product/" in html and re.search(r"^\s*- (?:link|text|banner|complementary)", html, re.MULTILINE):
@@ -142,6 +172,34 @@ class OzonAdapter(BaseAdapter):
         # Ozon is often stricter in headless mode; keep rendering headful when proxy is configured.
         return self.settings.browser_headless and self._proxy_url() is None
 
+    async def _details_from_search_result(
+        self,
+        url: str,
+        strategy: str = "auto",
+    ) -> tuple[ProductResult | None, list[str]]:
+        product_id = _product_id(url)
+        query = product_id or _query_from_product_url(url)
+        if not query:
+            return None, ["OZON_DETAILS_SEARCH_QUERY_UNAVAILABLE"]
+
+        search_url = self.build_search_url(query)
+        html, warnings = await self._load_html(query=query, url=search_url, strategy=strategy)
+        if not html:
+            return None, sorted(set(warnings + ["OZON_DETAILS_SEARCH_NO_FETCH"]))
+        if self._is_blocked(html):
+            return None, sorted(set(warnings + ["CAPTCHA_OR_BLOCKED", "OZON_DETAILS_SEARCH_BLOCKED"]))
+
+        expected_url = self.normalize_product_url(url)
+        for product in self.parse_search_results(html, query=query):
+            candidate_id = _product_id(product.url)
+            if product.url != expected_url and (not product_id or candidate_id != product_id):
+                continue
+            product.url = expected_url
+            product.confidence = min(product.confidence or 0.8, 0.8)
+            product.raw = {**(product.raw or {}), "source": "ozon_search_result_fallback"}
+            return product, sorted(set(warnings + ["OZON_DETAILS_SEARCH_FALLBACK"]))
+        return None, sorted(set(warnings + ["OZON_DETAILS_SEARCH_NO_MATCH"]))
+
 
 def _select_text(node, selectors: list[str]) -> str:
     for selector in selectors:
@@ -201,6 +259,17 @@ def _product_href(link) -> str:
     if not isinstance(href, str) or not href.strip():
         return ""
     return urljoin("https://www.ozon.ru", href.strip()).split("?")[0]
+
+
+def _query_from_product_url(url: str) -> str:
+    slug = urlsplit(url).path.rstrip("/").split("/")[-1]
+    slug = re.sub(r"-\d+$", "", slug)
+    return re.sub(r"[-_]+", " ", slug).strip()
+
+
+def _product_id(url: str) -> str | None:
+    match = re.search(r"-(\d+)/?$", urlsplit(url).path)
+    return match.group(1) if match else None
 
 
 def _looks_like_product_title(text: str) -> bool:

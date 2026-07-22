@@ -310,6 +310,42 @@ def test_ozon_playwright_uses_global_headless_without_proxy():
     assert adapter._playwright_headless() is True
 
 
+def test_ozon_details_uses_search_fallback_after_blocked_product_page(monkeypatch):
+    product_url = "https://www.ozon.ru/product/svetocopy-a4-500-l-bumaga-dlya-printera-7969279/"
+    calls: list[str] = []
+
+    async def fake_load_html(self, query, url, strategy="auto", fixture_html=None):
+        calls.append(url)
+        if url == product_url:
+            return OZON_NO_JS_CHALLENGE_HTML, []
+        if url.startswith("https://www.ozon.ru/search/?text="):
+            return OZON_MODERN_TILE_HTML, []
+        return None, ["UNEXPECTED_URL"]
+
+    async def fail_camofox(self, url):
+        raise AssertionError("Ozon details should prefer Ozon search fallback before Camofox")
+
+    monkeypatch.setattr(OzonAdapter, "_load_html", fake_load_html)
+    monkeypatch.setattr(OzonAdapter, "_details_with_camofox", fail_camofox)
+
+    async def run():
+        adapter = OzonAdapter(Settings(proxies={"ozon": "http://127.0.0.1:8080"}))
+        return await adapter.product_details(product_url, strategy="auto")
+
+    product, warnings, source_url = asyncio.run(run())
+
+    assert source_url == product_url
+    assert product is not None
+    assert product.title == "SvetoCopy A4 500 л Бумага для принтера"
+    assert product.price == 445.0
+    assert product.url == product_url
+    assert product.raw is not None
+    assert product.raw["source"] == "ozon_search_result_fallback"
+    assert "CAPTCHA_OR_BLOCKED" in warnings
+    assert "OZON_DETAILS_SEARCH_FALLBACK" in warnings
+    assert calls == [product_url, "https://www.ozon.ru/search/?text=7969279"]
+
+
 def test_playwright_options_include_browser_config():
     adapter = OzonAdapter(
         Settings(
