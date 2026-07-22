@@ -2,19 +2,23 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 
-from marketplaces_mcp.adapters import OzonAdapter, YandexMarketAdapter
+from marketplaces_mcp.adapters import AvitoAdapter, OzonAdapter, WildberriesAdapter, YandexMarketAdapter
 from marketplaces_mcp.core.artifacts import create_artifact, read_artifact
 from marketplaces_mcp.core.config import get_settings
 from marketplaces_mcp.core.matching import group_product_results
-from marketplaces_mcp.core.models import CompareResponse, OfferGroup, ProductResult, SearchResponse
+from marketplaces_mcp.core.models import CompareResponse, OfferGroup, ProductResult, ReviewsResponse, SearchResponse
+from marketplaces_mcp.core.reviews import fetch_reviews
 
 
 REQUIRED_TOOLS = [
     "marketplaces_search",
     "ozon_search",
+    "wildberries_search",
     "yandex_market_search",
+    "avito_search",
     "marketplaces_compare",
     "marketplaces_product_details",
+    "marketplaces_product_reviews",
     "marketplaces_get_artifact",
 ]
 
@@ -23,13 +27,16 @@ mcp = FastMCP("marketplaces-mcp")
 _settings = get_settings()
 _adapters = {
     "ozon": OzonAdapter(_settings),
+    "wildberries": WildberriesAdapter(_settings),
     "yandex_market": YandexMarketAdapter(_settings),
+    "avito": AvitoAdapter(_settings),
 }
+_default_marketplaces = ["ozon", "wildberries", "yandex_market"]
 
 
 def _as_marketplace_list(raw: list[str] | None) -> list[str]:
     if raw is None:
-        return list(_adapters.keys())
+        return list(_default_marketplaces)
     result = []
     for item in raw:
         if item in _adapters:
@@ -105,6 +112,32 @@ async def ozon_search(query: str, limit: int = 10, strategy: str = "auto"):
 
 
 @mcp.tool()
+async def wildberries_search(query: str, limit: int = 10, strategy: str = "auto"):
+    results, warnings, search_url = await _adapters["wildberries"].search(
+        query=query,
+        limit=limit,
+        strategy=strategy,
+    )
+    response = SearchResponse(
+        query=query,
+        marketplaces=["wildberries"],
+        results=results[:limit],
+        warnings=sorted(set(warnings)),
+    )
+    response.artifact_id = create_artifact(
+        {
+            "type": "search",
+            "query": query,
+            "marketplaces": ["wildberries"],
+            "search_urls": [search_url],
+            "strategy": strategy,
+            "results": [item.model_dump() for item in response.results],
+        }
+    )
+    return response
+
+
+@mcp.tool()
 async def yandex_market_search(query: str, limit: int = 10, strategy: str = "auto"):
     results, warnings, search_url = await _adapters["yandex_market"].search(
         query=query,
@@ -131,15 +164,46 @@ async def yandex_market_search(query: str, limit: int = 10, strategy: str = "aut
 
 
 @mcp.tool()
+async def avito_search(query: str, limit: int = 10, strategy: str = "auto"):
+    results, warnings, search_url = await _adapters["avito"].search(
+        query=query,
+        limit=limit,
+        strategy=strategy,
+    )
+    response = SearchResponse(
+        query=query,
+        marketplaces=["avito"],
+        results=results[:limit],
+        warnings=sorted(set(warnings)),
+    )
+    response.artifact_id = create_artifact(
+        {
+            "type": "search",
+            "query": query,
+            "marketplaces": ["avito"],
+            "search_urls": [search_url],
+            "strategy": strategy,
+            "results": [item.model_dump() for item in response.results],
+        }
+    )
+    return response
+
+
+@mcp.tool()
 async def marketplaces_compare(
     query: str,
     limit_per_marketplace: int = 10,
     strategy: str = "auto",
+    include_avito: bool = False,
 ):
     warnings: list[str] = []
     all_results: list[ProductResult] = []
     search_urls: list[str] = []
-    for adapter in _adapters.values():
+    adapter_keys = list(_default_marketplaces)
+    if include_avito:
+        adapter_keys.append("avito")
+    for key in adapter_keys:
+        adapter = _adapters[key]
         results, adapter_warnings, search_url = await adapter.search(
             query=query,
             limit=limit_per_marketplace,
@@ -233,6 +297,42 @@ async def marketplaces_product_details(url: str, strategy: str = "auto"):
 
 
 @mcp.tool()
+async def marketplaces_product_reviews(url: str, limit: int = 20):
+    marketplace = _detect_marketplace(url)
+    if marketplace not in _adapters:
+        return ReviewsResponse(
+            url=url,
+            marketplace="unknown",
+            warnings=["UNKNOWN_MARKETPLACE"],
+        )
+    reviews, warnings, review_url, total, rating = await fetch_reviews(
+        _adapters[marketplace],
+        url,
+        max(1, min(limit, 30)),
+    )
+    response = ReviewsResponse(
+        url=review_url,
+        marketplace=marketplace,
+        total_reviews=total,
+        rating=rating,
+        reviews=reviews,
+        warnings=warnings,
+    )
+    response.artifact_id = create_artifact(
+        {
+            "type": "product_reviews",
+            "url": review_url,
+            "marketplace": marketplace,
+            "total_reviews": total,
+            "rating": rating,
+            "warnings": warnings,
+            "reviews": [review.model_dump() for review in reviews],
+        }
+    )
+    return response
+
+
+@mcp.tool()
 async def marketplaces_get_artifact(artifact_id: str, name: str = "content.json"):
     return read_artifact(artifact_id, name=name)
 
@@ -241,8 +341,12 @@ def _detect_marketplace(url: str) -> str:
     lower = url.lower()
     if "ozon.ru" in lower:
         return "ozon"
+    if "wildberries.ru" in lower:
+        return "wildberries"
     if "market.yandex.ru" in lower or "yandex" in lower:
         return "yandex_market"
+    if "avito.ru" in lower:
+        return "avito"
     return "unknown"
 
 
