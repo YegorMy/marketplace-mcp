@@ -135,6 +135,48 @@ WILDBERRIES_FIXTURE_HTML = """
 </body></html>
 """
 
+WILDBERRIES_API_SEARCH_JSON = """
+{
+  "metadata": {"name": "бумага a4"},
+  "products": [
+    {
+      "id": 961622983,
+      "brand": "Снегурочка",
+      "name": "Бумага А4 для принтера офисная 500 листов",
+      "reviewRating": 5,
+      "feedbacks": 1520,
+      "totalQuantity": 14,
+      "sizes": [
+        {
+          "price": {"basic": 90000, "product": 51000}
+        }
+      ]
+    }
+  ],
+  "total": 111118
+}
+"""
+
+WILDBERRIES_API_DETAIL_JSON = """
+{
+  "products": [
+    {
+      "id": 961622983,
+      "brand": "Снегурочка",
+      "name": "Бумага А4 для принтера офисная 500 листов",
+      "reviewRating": 5,
+      "feedbacks": 1520,
+      "totalQuantity": 14,
+      "sizes": [
+        {
+          "price": {"basic": 90000, "product": 51000}
+        }
+      ]
+    }
+  ]
+}
+"""
+
 OZON_CAMOFOX_SNAPSHOT = """
 - link "Распродажа":
   - /url: /product/namatrasnik-60x120h15sm-belyy-750317510/?tracking=1
@@ -500,6 +542,98 @@ def test_wildberries_fixture_parsing():
     assert results[0].title == "Наматрасник детский 60x120 TPU"
     assert results[0].price == 799.0
     assert results[0].url == "https://www.wildberries.ru/catalog/5148062/detail.aspx"
+
+
+def test_wildberries_search_uses_public_api_before_blocked_browser(monkeypatch):
+    api_urls: list[str] = []
+
+    async def fake_api(self, url: str):
+        api_urls.append(url)
+        return json.loads(WILDBERRIES_API_SEARCH_JSON)
+
+    async def fail_load_html(self, query, url, strategy="auto", fixture_html=None):
+        raise AssertionError("Wildberries live search should use the public API before browser rendering")
+
+    monkeypatch.setattr(WildberriesAdapter, "_fetch_wildberries_api", fake_api, raising=False)
+    monkeypatch.setattr(WildberriesAdapter, "_load_html", fail_load_html)
+
+    async def run():
+        return await WildberriesAdapter().search(query="бумага a4", limit=2, strategy="auto")
+
+    results, warnings, search_url = asyncio.run(run())
+
+    assert search_url == "https://www.wildberries.ru/catalog/0/search.aspx?search=%D0%B1%D1%83%D0%BC%D0%B0%D0%B3%D0%B0+a4"
+    assert warnings == ["WILDBERRIES_API_SEARCH"]
+    assert len(results) == 1
+    assert results[0].title == "Бумага А4 для принтера офисная 500 листов"
+    assert results[0].price == 510.0
+    assert results[0].old_price == 900.0
+    assert results[0].url == "https://www.wildberries.ru/catalog/961622983/detail.aspx"
+    assert results[0].rating == 5.0
+    assert results[0].reviews_count == 1520
+    assert api_urls == [
+        "https://search.wb.ru/exactmatch/ru/common/v9/search?ab_testing=false&appType=1&curr=rub&dest=-1257786&page=1&query=%D0%B1%D1%83%D0%BC%D0%B0%D0%B3%D0%B0+a4&resultset=catalog&sort=popular&spp=30&suppressSpellcheck=false"
+    ]
+
+
+def test_wildberries_details_uses_public_api_by_product_id(monkeypatch):
+    product_url = "https://www.wildberries.ru/catalog/961622983/detail.aspx?targetUrl=GP"
+    api_urls: list[str] = []
+
+    async def fake_api(self, url: str):
+        api_urls.append(url)
+        return json.loads(WILDBERRIES_API_DETAIL_JSON)
+
+    async def fail_load_html(self, query, url, strategy="auto", fixture_html=None):
+        raise AssertionError("Wildberries details should use card API before browser rendering")
+
+    monkeypatch.setattr(WildberriesAdapter, "_fetch_wildberries_api", fake_api, raising=False)
+    monkeypatch.setattr(WildberriesAdapter, "_load_html", fail_load_html)
+
+    async def run():
+        return await WildberriesAdapter().product_details(product_url, strategy="auto")
+
+    product, warnings, source_url = asyncio.run(run())
+
+    assert source_url == "https://www.wildberries.ru/catalog/961622983/detail.aspx"
+    assert warnings == ["WILDBERRIES_API_DETAILS"]
+    assert product is not None
+    assert product.title == "Бумага А4 для принтера офисная 500 листов"
+    assert product.price == 510.0
+    assert product.old_price == 900.0
+    assert product.url == "https://www.wildberries.ru/catalog/961622983/detail.aspx"
+    assert api_urls == [
+        "https://card.wb.ru/cards/v4/detail?appType=1&curr=rub&dest=-1257786&nm=961622983&spp=30"
+    ]
+
+
+def test_wildberries_api_uses_adapter_local_user_agent_signature():
+    adapter = WildberriesAdapter(
+        Settings(user_agent="Mozilla/5.0 (X11; Linux x86_64) Chrome/124.0.0.0 Safari/537.36")
+    )
+
+    assert adapter._wildberries_api_headers()["User-Agent"] == "Mozilla/5.0"
+
+
+def test_wildberries_search_uses_stable_v9_api_endpoint(monkeypatch):
+    api_urls: list[str] = []
+
+    async def fake_api(self, url: str):
+        api_urls.append(url)
+        return json.loads(WILDBERRIES_API_SEARCH_JSON)
+
+    monkeypatch.setattr(WildberriesAdapter, "_fetch_wildberries_api", fake_api, raising=False)
+
+    async def run():
+        return await WildberriesAdapter().search(query="свитчи Kailh", limit=2, strategy="auto")
+
+    results, warnings, _ = asyncio.run(run())
+
+    assert results
+    assert warnings == ["WILDBERRIES_API_SEARCH"]
+    assert api_urls == [
+        "https://search.wb.ru/exactmatch/ru/common/v9/search?ab_testing=false&appType=1&curr=rub&dest=-1257786&page=1&query=%D1%81%D0%B2%D0%B8%D1%82%D1%87%D0%B8+Kailh&resultset=catalog&sort=popular&spp=30&suppressSpellcheck=false"
+    ]
 
 
 def test_ozon_camofox_snapshot_parsing():
