@@ -45,7 +45,7 @@ def _default_avito_state_path() -> Path:
     value = os.getenv("MARKETPLACES_AVITO_STATE_PATH")
     if value:
         return Path(value).expanduser()
-    return _default_artifact_dir().parent / "avito-access-state.json"
+    return Path.home() / ".cache" / "marketplaces-mcp" / "avito-access-state.json"
 
 
 def _float_env(name: str, default: float, minimum: float = 0.0) -> float:

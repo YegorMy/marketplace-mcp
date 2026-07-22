@@ -94,6 +94,8 @@ class BaseAdapter(ABC):
         search_url = self.build_search_url(query)
         html, warnings = await self._load_html(query, search_url, strategy=strategy, fixture_html=fixture_html)
         if not html:
+            if strategy == "fixture":
+                return [], sorted(set(warnings)), search_url
             recovered, recovery_warnings = await self._search_with_camofox(search_url, query)
             if recovered:
                 return recovered[:limit], sorted(set(warnings + recovery_warnings)), search_url
@@ -101,6 +103,9 @@ class BaseAdapter(ABC):
             return offers, sorted(set(warnings + recovery_warnings + discovery_warnings)), search_url
         if self._is_blocked(html):
             warnings.append("HIVE_WEB_BLOCKED")
+            if strategy == "fixture":
+                warnings.append("CAPTCHA_OR_BLOCKED")
+                return [], sorted(set(warnings)), search_url
             recovered, recovery_warnings = await self._search_with_camofox(search_url, query)
             if recovered:
                 return recovered[:limit], sorted(set(warnings + recovery_warnings)), search_url
@@ -109,6 +114,9 @@ class BaseAdapter(ABC):
             return offers, sorted(set(warnings + recovery_warnings + discovery_warnings)), search_url
         offers = self.parse_search_results(html, query=query)
         if not offers:
+            if strategy == "fixture":
+                warnings.append("NO_RESULTS")
+                return [], sorted(set(warnings)), search_url
             recovered, recovery_warnings = await self._search_with_camofox(search_url, query)
             if recovered:
                 return recovered[:limit], sorted(set(warnings + recovery_warnings)), search_url
@@ -133,10 +141,15 @@ class BaseAdapter(ABC):
             fixture_html=fixture_html,
         )
         if not html:
+            if strategy == "fixture":
+                return None, sorted(set(warnings)), url
             recovered, recovery_warnings = await self._details_with_camofox(url)
             return recovered, sorted(set(warnings + recovery_warnings)), url
         if self._is_blocked(html):
             warnings.append("HIVE_WEB_BLOCKED")
+            if strategy == "fixture":
+                warnings.append("CAPTCHA_OR_BLOCKED")
+                return None, sorted(set(warnings)), url
             recovered, recovery_warnings = await self._details_with_camofox(url)
             if recovered is not None:
                 return recovered, sorted(set(warnings + recovery_warnings)), url
@@ -144,6 +157,9 @@ class BaseAdapter(ABC):
             return None, sorted(set(warnings)), url
         product = self.parse_product_details(html, url=url)
         if product is None:
+            if strategy == "fixture":
+                warnings.append("NO_RESULTS")
+                return None, sorted(set(warnings)), url
             recovered, recovery_warnings = await self._details_with_camofox(url)
             if recovered is not None:
                 return recovered, sorted(set(warnings + recovery_warnings)), url

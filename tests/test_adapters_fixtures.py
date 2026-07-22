@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
+
 import pytest
 
 from marketplaces_mcp.adapters import AvitoAdapter, OzonAdapter, WildberriesAdapter, YandexMarketAdapter
@@ -422,6 +424,69 @@ def test_avito_ip_block_starts_shared_cooldown(tmp_path, monkeypatch):
     assert "AVITO_IP_BLOCKED" in first_warnings
     assert second_warnings == ["AVITO_IP_COOLDOWN"]
     assert os.stat(state_path).st_mode & 0o777 == 0o600
+
+
+def test_avito_state_path_can_live_under_existing_shared_directory(monkeypatch):
+    state_path = Path(os.path.abspath(os.path.join(os.sep, "tmp", "marketplaces-avito-state-test.json")))
+
+    async def run():
+        settings = Settings(
+            avito_state_path=state_path,
+            avito_min_interval_seconds=0,
+        )
+        adapter = AvitoAdapter(settings)
+
+        async def no_snapshot(_url: str):
+            return None
+
+        async def no_index(_query: str, _limit: int):
+            return [], ["INDEX_DISCOVERY_NO_RESULTS"]
+
+        monkeypatch.setattr(adapter, "_fetch_with_camofox", no_snapshot)
+        monkeypatch.setattr(adapter, "_discover_indexed", no_index)
+        return await adapter.search("кроватка", limit=1)
+
+    try:
+        results, warnings, _ = asyncio.run(run())
+        assert results == []
+        assert "AVITO_LIVE_NO_RESULTS" in warnings
+        assert os.stat(state_path).st_mode & 0o777 == 0o600
+    finally:
+        for path in (state_path, Path(f"{state_path}.lock")):
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+
+
+def test_fixture_strategy_never_uses_live_or_index_fallback(monkeypatch):
+    async def run():
+        adapter = OzonAdapter()
+
+        async def forbidden_camofox(_url: str):
+            raise AssertionError("fixture mode must not call Camofox")
+
+        async def forbidden_index(_query: str, _limit: int):
+            raise AssertionError("fixture mode must not call public search index")
+
+        monkeypatch.setattr(adapter, "_fetch_with_camofox", forbidden_camofox)
+        monkeypatch.setattr(adapter, "_discover_indexed", forbidden_index)
+        missing = await adapter.search("missing fixture", limit=1, strategy="fixture")
+        empty = await adapter.search("empty fixture", limit=1, strategy="fixture", fixture_html="<html></html>")
+        details = await adapter.product_details(
+            "https://www.ozon.ru/product/missing-1/",
+            strategy="fixture",
+            fixture_html="<html></html>",
+        )
+        return missing, empty, details
+
+    (missing_results, missing_warnings, _), (empty_results, empty_warnings, _), (product, details_warnings, _) = asyncio.run(run())
+    assert missing_results == []
+    assert missing_warnings == ["FIXTURE_NOT_FOUND"]
+    assert empty_results == []
+    assert empty_warnings == ["NO_RESULTS"]
+    assert product is None
+    assert details_warnings == ["NO_RESULTS"]
 
 
 def test_blocked_hive_recovers_with_camofox(monkeypatch):

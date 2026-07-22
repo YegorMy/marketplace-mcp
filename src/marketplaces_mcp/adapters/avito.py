@@ -360,7 +360,6 @@ class _locked_state:
 
     def __enter__(self) -> dict[str, object]:
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(self.path.parent, 0o700)
         descriptor = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
         self.lock_file = os.fdopen(descriptor, "r+")
         _lock_file(self.lock_file)

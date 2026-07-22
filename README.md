@@ -51,7 +51,8 @@ Marketplace MCP uses Hive Web as the default page loader (`MARKETPLACES_WEB_BACK
 - `MARKETPLACES_CAMOFOX_URL`: optional Camofox base URL for anonymous ephemeral
   read-only fallback sessions.
 - `MARKETPLACES_AVITO_REGION_SLUG`: Avito region path (default `all`).
-- `MARKETPLACES_AVITO_STATE_PATH`: shared Avito rate-limit state file.
+- `MARKETPLACES_AVITO_STATE_PATH`: shared Avito rate-limit state file
+  (default `~/.cache/marketplaces-mcp/avito-access-state.json`).
 - `MARKETPLACES_AVITO_MIN_INTERVAL_SECONDS`: minimum interval between Avito live
   requests (default `10`).
 - `MARKETPLACES_AVITO_BLOCK_COOLDOWN_SECONDS`: cooldown after an explicit Avito
