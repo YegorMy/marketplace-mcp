@@ -32,6 +32,32 @@ def _default_hive_web_max_tokens() -> int:
         return 12000
 
 
+def _default_camofox_url() -> str:
+    return os.getenv("MARKETPLACES_CAMOFOX_URL", "").strip().rstrip("/")
+
+
+def _default_avito_region_slug() -> str:
+    value = os.getenv("MARKETPLACES_AVITO_REGION_SLUG", "all").strip().strip("/")
+    return value or "all"
+
+
+def _default_avito_state_path() -> Path:
+    value = os.getenv("MARKETPLACES_AVITO_STATE_PATH")
+    if value:
+        return Path(value).expanduser()
+    return _default_artifact_dir().parent / "avito-access-state.json"
+
+
+def _float_env(name: str, default: float, minimum: float = 0.0) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return max(float(value), minimum)
+    except (TypeError, ValueError):
+        return default
+
+
 @dataclass(frozen=True)
 class Settings:
     user_agent: str = (
@@ -44,6 +70,15 @@ class Settings:
     artifact_dir: Path = field(default_factory=_default_artifact_dir)
     web_backend: str = field(default_factory=_default_web_backend)
     hive_web_max_tokens: int = field(default_factory=_default_hive_web_max_tokens)
+    camofox_url: str = field(default_factory=_default_camofox_url)
+    avito_region_slug: str = field(default_factory=_default_avito_region_slug)
+    avito_state_path: Path = field(default_factory=_default_avito_state_path)
+    avito_min_interval_seconds: float = field(
+        default_factory=lambda: _float_env("MARKETPLACES_AVITO_MIN_INTERVAL_SECONDS", 10.0)
+    )
+    avito_block_cooldown_seconds: float = field(
+        default_factory=lambda: _float_env("MARKETPLACES_AVITO_BLOCK_COOLDOWN_SECONDS", 21600.0, 60.0)
+    )
 
 
 def get_settings() -> Settings:
