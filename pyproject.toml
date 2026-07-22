@@ -16,6 +16,7 @@ dependencies = [
   "beautifulsoup4>=4.12.0",
   "httpx>=0.27.0",
   "anyio>=4.4.0",
+  "ddgs>=9.8.0,<10",
   "hive-web-runtime @ git+https://github.com/YegorMy/hive-web.git"
 ]
 

@@ -10,11 +10,14 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_TOOLS = {
+    "avito_search",
     "marketplaces_search",
     "ozon_search",
+    "wildberries_search",
     "yandex_market_search",
     "marketplaces_compare",
     "marketplaces_product_details",
+    "marketplaces_product_reviews",
     "marketplaces_get_artifact",
 }
 
@@ -22,13 +25,18 @@ REQUIRED_TOOLS = {
 def _write_fixture(root: Path) -> None:
     slug = "бумага_a4"
     (root / "ozon").mkdir(parents=True)
+    (root / "wildberries").mkdir(parents=True)
     (root / "yandex_market").mkdir(parents=True)
     (root / "ozon" / f"{slug}.html").write_text(
         "<div class='tile-root'><a href='/product/1' title='Бумага A4 500 листов'>Бумага A4 500 листов</a><span class='price'>399 ₽</span></div>",
         encoding="utf-8",
     )
+    (root / "wildberries" / f"{slug}.html").write_text(
+        "<article class='product-card'><a href='/catalog/5148062/detail.aspx' aria-label='Бумага A4 Wildberries'></a><span class='price'>409 ₽</span></article>",
+        encoding="utf-8",
+    )
     (root / "yandex_market" / f"{slug}.html").write_text(
-        "<div class='n-snippet-card'><h3>Бумага A4 500 листов</h3><a href='/product/2'>link</a><span class='price'>429 ₽</span></div>",
+        "<div data-zone-name='productSnippet'><a data-auto='snippet-link' href='/card/yandex-smoke/102236642854'>Бумага A4 Яндекс</a><span>Цена с картой Яндекс Пэй 429 ₽</span></div>",
         encoding="utf-8",
     )
 
