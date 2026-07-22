@@ -288,12 +288,14 @@ class BaseAdapter(ABC):
         url: str,
         query: str,
     ) -> tuple[list[ProductResult], list[str]]:
+        if not self.settings.camofox_url:
+            return [], ["CAMOFOX_NOT_CONFIGURED"]
         try:
             snapshot = await self._fetch_with_camofox(url)
         except Exception:
             return [], ["CAMOFOX_FAILED"]
         if not snapshot:
-            return [], ["CAMOFOX_FAILED"]
+            return [], [self._camofox_unavailable_warning()]
         if self._is_blocked(snapshot):
             return [], ["CAMOFOX_BLOCKED"]
         products = self.parse_search_results(snapshot, query=query)
@@ -305,14 +307,16 @@ class BaseAdapter(ABC):
         self,
         url: str,
     ) -> tuple[ProductResult | None, list[str]]:
-        last_warning = "CAMOFOX_FAILED"
+        if not self.settings.camofox_url:
+            return None, ["CAMOFOX_NOT_CONFIGURED"]
+        last_warning = self._camofox_unavailable_warning()
         for attempt in range(2):
             try:
                 snapshot = await self._fetch_with_camofox(url)
             except Exception:
                 snapshot = None
             if not snapshot:
-                last_warning = "CAMOFOX_FAILED"
+                last_warning = self._camofox_unavailable_warning()
             elif self._is_blocked(snapshot):
                 last_warning = "CAMOFOX_BLOCKED"
             else:
@@ -325,7 +329,13 @@ class BaseAdapter(ABC):
                 last_warning = "CAMOFOX_NO_RESULTS"
             if attempt == 0:
                 await anyio.sleep(0.5)
-        return None, [last_warning, "CAMOFOX_RETRIED"]
+        warnings = [last_warning]
+        if last_warning != "CAMOFOX_NOT_CONFIGURED":
+            warnings.append("CAMOFOX_RETRIED")
+        return None, warnings
+
+    def _camofox_unavailable_warning(self) -> str:
+        return "CAMOFOX_FAILED" if self.settings.camofox_url else "CAMOFOX_NOT_CONFIGURED"
 
     async def _fetch_with_playwright(self, url: str) -> str | None:
         try:

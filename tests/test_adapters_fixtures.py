@@ -9,6 +9,7 @@ import pytest
 
 from marketplaces_mcp.adapters import AvitoAdapter, OzonAdapter, WildberriesAdapter, YandexMarketAdapter
 from marketplaces_mcp.core.config import Settings, get_settings
+from marketplaces_mcp.core.reviews import fetch_reviews
 
 
 OZON_FIXTURE_HTML = """
@@ -94,6 +95,33 @@ YANDEX_RENDERED_FIXTURE_HTML = """
   <div data-zone-name="productSnippet">
     <a data-auto="snippet-link" href="/card/namatrasnik-peligrin-120x60/103836068979">Наматрасник Пелигрин 120х60</a>
     <div>Цена с картой Яндекс Пэй 370 ₽ вместо 410 ₽ Пэй Рейтинг товара: 4.8 из 5 Оценок: (15) · 80 купили Завтра, курьер В корзину</div>
+  </div>
+</body></html>
+"""
+
+YANDEX_MODERN_SEARCH_HTML = """
+<html><body>
+  <div data-zone-name="productSnippet">
+    <div data-zone-name="title">
+      <a href="/card/mekhanicheskiye-pereklyuchateli-kailh-box-navy-klikayushchiye-110-shtuk/5694381852?do-waremd5=token">
+        Механические переключатели Kailh Box Navy (кликающие) 110 штук
+      </a>
+    </div>
+    <div>Цвет товара: темно-синий, темно-синий</div>
+    <a href="/card/mekhanicheskiye-pereklyuchateli-kailh-box-navy-klikayushchiye-110-shtuk/5694381852?do-waremd5=token">
+      Цена с картой Яндекс Пэй 5 833 ₽ вместо 5 833 ₽ Пэй
+    </a>
+    <div>Рейтинг товара: 4.8 из 5 Оценок: (12) · 42 купили До 7 дней, ПВЗ В корзину</div>
+  </div>
+  <div data-zone-name="productSnippet">
+    <div data-zone-name="title">
+      <a href="/card/mekhanicheskiye-pereklyuchateli-kailh-box-navy-klikayushchiye-90-shtuk/5693904311?do-waremd5=token">
+        Механические переключатели Kailh Box Navy (кликающие) 90 штук
+      </a>
+    </div>
+    <a href="/card/mekhanicheskiye-pereklyuchateli-kailh-box-navy-klikayushchiye-90-shtuk/5693904311?do-waremd5=token">
+      Цена с картой Яндекс Пэй 4 859 ₽ вместо 4 859 ₽ Пэй
+    </a>
   </div>
 </body></html>
 """
@@ -355,6 +383,30 @@ def test_yandex_rendered_dom_fixture_parsing_is_product_agnostic():
     assert first.delivery_hint == "Послезавтра, ПВЗ"
 
 
+def test_yandex_modern_search_card_parsing_uses_title_zone_link():
+    async def run():
+        adapter = YandexMarketAdapter()
+        results, warnings, _ = await adapter.search(
+            query="Kailh Box Navy 100",
+            limit=3,
+            strategy="fixture",
+            fixture_html=YANDEX_MODERN_SEARCH_HTML,
+        )
+        return results, warnings
+
+    results, warnings = asyncio.run(run())
+    assert not warnings
+    assert len(results) == 2
+    first = results[0]
+    assert first.marketplace == "yandex_market"
+    assert first.title == "Механические переключатели Kailh Box Navy (кликающие) 110 штук"
+    assert first.url == "https://market.yandex.ru/card/mekhanicheskiye-pereklyuchateli-kailh-box-navy-klikayushchiye-110-shtuk/5694381852"
+    assert first.price == 5833.0
+    assert first.rating == 4.8
+    assert first.reviews_count == 12
+    assert first.delivery_hint == "До 7 дней, ПВЗ"
+
+
 def test_wildberries_fixture_parsing():
     async def run():
         return await WildberriesAdapter().search(
@@ -416,6 +468,63 @@ def test_yandex_camofox_product_details_keep_material_evidence():
     assert product.url == "https://market.yandex.ru/card/detskiy-namatrasnik/102236642854"
     assert product.raw is not None
     assert "водонепроницаемой дышащей мембраны" in product.raw["evidence_excerpt"]
+
+
+def test_camofox_warning_reports_not_configured_for_search_details_and_reviews():
+    async def run():
+        adapter = OzonAdapter(Settings(camofox_url=""))
+        search_results, search_warnings = await adapter._search_with_camofox(
+            "https://www.ozon.ru/search/?text=namatrasnik",
+            "namatrasnik",
+        )
+        product, details_warnings = await adapter._details_with_camofox(
+            "https://www.ozon.ru/product/namatrasnik-1/"
+        )
+        reviews, review_warnings, _, _, _ = await fetch_reviews(
+            adapter,
+            "https://www.ozon.ru/product/namatrasnik-1/",
+            limit=3,
+        )
+        return search_results, search_warnings, product, details_warnings, reviews, review_warnings
+
+    search_results, search_warnings, product, details_warnings, reviews, review_warnings = asyncio.run(run())
+    assert search_results == []
+    assert search_warnings == ["CAMOFOX_NOT_CONFIGURED"]
+    assert product is None
+    assert details_warnings == ["CAMOFOX_NOT_CONFIGURED"]
+    assert reviews == []
+    assert review_warnings == ["CAMOFOX_NOT_CONFIGURED"]
+
+
+def test_camofox_warning_reports_runtime_failure_when_configured(monkeypatch):
+    async def run():
+        adapter = OzonAdapter(Settings(camofox_url="http://127.0.0.1:9"))
+
+        async def failing_camofox(_url: str):
+            raise RuntimeError("runtime unavailable")
+
+        monkeypatch.setattr(adapter, "_fetch_with_camofox", failing_camofox)
+        search_results, search_warnings = await adapter._search_with_camofox(
+            "https://www.ozon.ru/search/?text=namatrasnik",
+            "namatrasnik",
+        )
+        product, details_warnings = await adapter._details_with_camofox(
+            "https://www.ozon.ru/product/namatrasnik-1/"
+        )
+        reviews, review_warnings, _, _, _ = await fetch_reviews(
+            adapter,
+            "https://www.ozon.ru/product/namatrasnik-1/",
+            limit=3,
+        )
+        return search_results, search_warnings, product, details_warnings, reviews, review_warnings
+
+    search_results, search_warnings, product, details_warnings, reviews, review_warnings = asyncio.run(run())
+    assert search_results == []
+    assert search_warnings == ["CAMOFOX_FAILED"]
+    assert product is None
+    assert details_warnings == ["CAMOFOX_FAILED", "CAMOFOX_RETRIED"]
+    assert reviews == []
+    assert review_warnings == ["CAMOFOX_FAILED", "CAMOFOX_RETRIED"]
 
 
 def test_avito_camofox_product_details_keep_used_offer_evidence():
@@ -630,6 +739,41 @@ def test_blocked_hive_recovers_with_camofox(monkeypatch):
     assert "HIVE_WEB_BLOCKED" in warnings
     assert "CAMOFOX_FALLBACK" in warnings
     assert "CAPTCHA_OR_BLOCKED" not in warnings
+
+
+def test_yandex_blocked_hive_falls_back_to_direct_search_html(monkeypatch):
+    async def run():
+        calls = {"http": 0}
+
+        async def blocked_hive(self, _url: str):
+            return "<html><title>Antibot Captcha</title><body>Confirm that you're not a bot</body></html>"
+
+        async def no_camofox(self, _url: str):
+            return None
+
+        async def no_index_results(self, _query: str, _limit: int):
+            return [], ["INDEX_DISCOVERY_NO_RESULTS"]
+
+        async def direct_search_html(self, url: str):
+            calls["http"] += 1
+            assert "local-offers-first=0" in url
+            return YANDEX_MODERN_SEARCH_HTML
+
+        monkeypatch.setattr(YandexMarketAdapter, "_fetch_with_hive_web", blocked_hive)
+        monkeypatch.setattr(YandexMarketAdapter, "_fetch_with_camofox", no_camofox)
+        monkeypatch.setattr(YandexMarketAdapter, "_discover_indexed", no_index_results)
+        monkeypatch.setattr(YandexMarketAdapter, "_fetch_with_http", direct_search_html)
+
+        adapter = YandexMarketAdapter(Settings(web_backend="hive_web"))
+        results, warnings, _ = await adapter.search(query="Kailh Box Navy 100", limit=3, strategy="auto")
+        return results, warnings, calls
+
+    results, warnings, calls = asyncio.run(run())
+    assert len(results) == 2
+    assert results[0].title == "Механические переключатели Kailh Box Navy (кликающие) 110 штук"
+    assert "HIVE_WEB_BLOCKED" in warnings
+    assert "YANDEX_HTTP_FALLBACK" in warnings
+    assert calls["http"] == 1
 
 
 def test_product_details_retries_one_empty_camofox_snapshot(monkeypatch):

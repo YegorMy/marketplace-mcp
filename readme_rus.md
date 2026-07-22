@@ -79,6 +79,14 @@ Runtime-настройки также можно хранить в `~/.config/ma
 }
 ```
 
+Для локальной разработки `scripts/camofox-bridge.py` поднимает небольшой Camofox-compatible read-only API, который используют адаптеры (`POST /tabs`, `GET /tabs/{tabId}/snapshot`, `DELETE /sessions/{userId}`), поверх Hive Web/Playwright:
+
+```bash
+uv run python scripts/camofox-bridge.py --host 127.0.0.1 --port 8765 --headful
+```
+
+После этого укажите `"camofox_url": "http://127.0.0.1:8765"` в runtime config.
+
 Proxy применяется только к указанному маркетплейсу. Если для маркетплейса настроен proxy, adapter пропускает Hive Web для этого маркетплейса и использует proxied Playwright/httpx path. Для browser-heavy маркетплейсов используйте HTTP proxy с авторизацией: Chromium/Playwright не поддерживает authenticated SOCKS5 proxies. Переменные окружения имеют приоритет над файлом: `MARKETPLACES_PROXY_OZON_URL`, `MARKETPLACES_OZON_PROXY_URL`, `OZON_PROXY_URL`, `MARKETPLACES_PROXY_YANDEX_MARKET_URL`, `MARKETPLACES_YANDEX_MARKET_PROXY_URL`, `YANDEX_MARKET_PROXY_URL`.
 
 Ozon рендерится с включённым JavaScript. Если для Ozon настроен proxy, адаптер держит Playwright в headful-режиме даже при `browser_headless=true`, потому что Ozon строже относится к headless. Отключать JavaScript как fallback бесполезно: Ozon возвращает anti-bot challenge с просьбой включить JavaScript, и adapter сообщает это как `CAPTCHA_OR_BLOCKED`.

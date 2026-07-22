@@ -83,6 +83,14 @@ Runtime settings can also live in `~/.config/marketplaces-mcp/config.json` or in
 }
 ```
 
+For local development, `scripts/camofox-bridge.py` exposes the small Camofox-compatible read-only API used by the adapters (`POST /tabs`, `GET /tabs/{tabId}/snapshot`, `DELETE /sessions/{userId}`) on top of Hive Web/Playwright:
+
+```bash
+uv run python scripts/camofox-bridge.py --host 127.0.0.1 --port 8765 --headful
+```
+
+Then set `"camofox_url": "http://127.0.0.1:8765"` in the runtime config.
+
 Per-marketplace proxy values are only applied to that marketplace. When a proxy is configured for a marketplace, the adapter skips Hive Web for that marketplace and uses the proxied Playwright/httpx path. Use an HTTP proxy with authentication for browser-heavy marketplaces because Chromium/Playwright does not support authenticated SOCKS5 proxies. Environment variables override file values: `MARKETPLACES_PROXY_OZON_URL`, `MARKETPLACES_OZON_PROXY_URL`, `OZON_PROXY_URL`, `MARKETPLACES_PROXY_YANDEX_MARKET_URL`, `MARKETPLACES_YANDEX_MARKET_PROXY_URL`, `YANDEX_MARKET_PROXY_URL`.
 
 Ozon is rendered with JavaScript enabled. When an Ozon proxy is configured, the Ozon adapter keeps Playwright headful even if `browser_headless` is true, because Ozon is stricter in headless mode. Disabling JavaScript is not a useful fallback: Ozon returns an anti-bot challenge asking the browser to enable JavaScript, and the adapter reports it as `CAPTCHA_OR_BLOCKED`.

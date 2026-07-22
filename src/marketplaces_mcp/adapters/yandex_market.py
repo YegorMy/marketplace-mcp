@@ -12,9 +12,41 @@ from marketplaces_mcp.core.normalize import parse_price
 
 class YandexMarketAdapter(BaseAdapter):
     marketplace = "yandex_market"
-    search_url_template = "https://market.yandex.ru/search?text={query}"
+    search_url_template = "https://market.yandex.ru/search?text={query}&local-offers-first=0"
     discovery_domain = "market.yandex.ru/card"
     product_url_patterns = (r"https://market\.yandex\.ru/(?:card|product--)/[^/?#]+/\d+/?$",)
+
+    async def search(
+        self,
+        query: str,
+        limit: int = 10,
+        strategy: str = "auto",
+        fixture_html: str | None = None,
+    ) -> tuple[list[ProductResult], list[str], str]:
+        products, warnings, search_url = await super().search(
+            query=query,
+            limit=limit,
+            strategy=strategy,
+            fixture_html=fixture_html,
+        )
+        if products or strategy == "fixture":
+            return products, warnings, search_url
+        if not {"HIVE_WEB_BLOCKED", "NO_RESULTS", "CAPTCHA_OR_BLOCKED"}.intersection(warnings):
+            return products, warnings, search_url
+
+        try:
+            html = await self._fetch_with_http(search_url)
+        except Exception:
+            return products, sorted(set(warnings + ["YANDEX_HTTP_FALLBACK_FAILED"])), search_url
+        if not html:
+            return products, sorted(set(warnings + ["YANDEX_HTTP_FALLBACK_FAILED"])), search_url
+
+        http_products = self.parse_search_results(html, query=query)
+        if http_products:
+            return http_products[:limit], sorted(set(warnings + ["YANDEX_HTTP_FALLBACK"])), search_url
+        if self._is_blocked(html):
+            return products, sorted(set(warnings + ["YANDEX_HTTP_BLOCKED"])), search_url
+        return products, sorted(set(warnings + ["YANDEX_HTTP_NO_RESULTS"])), search_url
 
     def parse_search_results(self, html: str, query: str) -> list[ProductResult]:
         if "/card/" in html and re.search(r"^- (?:article|link|dialog|banner)", html, re.MULTILINE):
@@ -33,8 +65,10 @@ class YandexMarketAdapter(BaseAdapter):
             title = _select_text(
                 card,
                 [
+                    "[data-zone-name='title'] a[href*='/card/']",
                     "[data-auto='snippet-title']",
                     "[data-auto='snippet-link']",
+                    "a[href*='/card/']",
                     "h3",
                     "h2",
                     "[data-testid='snippet-title']",
@@ -46,9 +80,10 @@ class YandexMarketAdapter(BaseAdapter):
             url = _first_attr(
                 card,
                 [
+                    "[data-zone-name='title'] a[href*='/card/']",
                     "[data-auto='snippet-title-link']",
                     "[data-auto='snippet-link']",
-                    "a",
+                    "a[href*='/card/']",
                 ],
                 "href",
             ) or ""
@@ -264,7 +299,7 @@ def _extract_text_card_delivery_hint(text: str) -> str | None:
         if price_match:
             segment = segment[price_match.end() :]
     match = re.search(
-        r"\b(Сегодня|Завтра|Послезавтра)\b\s*,?\s*(.*?)\s*(?=\s*(?:В корзину|Оценок|Рейтинг товара|·|$))",
+        r"\b(Сегодня|Завтра|Послезавтра|До\s+\d+\s+дн(?:я|ей))\b\s*,?\s*(.*?)\s*(?=\s*(?:В корзину|Оценок|Рейтинг товара|·|$))",
         segment,
         flags=re.IGNORECASE,
     )

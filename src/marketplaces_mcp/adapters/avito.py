@@ -116,13 +116,15 @@ class AvitoAdapter(BaseAdapter):
         return None, sorted(set(warnings + ["AVITO_LIVE_NO_RESULTS"])), normalized
 
     async def _fetch_readonly_snapshot(self, url: str) -> tuple[str | None, list[str]]:
+        if not self.settings.camofox_url:
+            return None, ["CAMOFOX_NOT_CONFIGURED"]
         try:
             snapshot = await self._fetch_with_camofox(url)
         except Exception:
             snapshot = None
         if snapshot:
             return snapshot, ["CAMOFOX_READONLY"]
-        return None, ["CAMOFOX_FAILED"]
+        return None, [self._camofox_unavailable_warning()]
 
     async def _reserve_live_request(self) -> tuple[bool, float]:
         return await anyio.to_thread.run_sync(self._reserve_live_request_sync)

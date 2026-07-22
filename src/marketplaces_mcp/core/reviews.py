@@ -35,14 +35,16 @@ async def fetch_reviews(
     if adapter.marketplace not in {"ozon", "yandex_market"}:
         return [], ["REVIEWS_UNSUPPORTED"], product_url, None, None
     url = reviews_url(adapter.marketplace, product_url)
-    last_warning = "CAMOFOX_FAILED"
+    if not adapter.settings.camofox_url:
+        return [], ["CAMOFOX_NOT_CONFIGURED"], url, None, None
+    last_warning = adapter._camofox_unavailable_warning()
     for attempt in range(2):
         try:
             snapshot = await adapter._fetch_with_camofox(url)
         except Exception:
             snapshot = None
         if not snapshot:
-            last_warning = "CAMOFOX_FAILED"
+            last_warning = adapter._camofox_unavailable_warning()
         elif adapter._is_blocked(snapshot):
             last_warning = "CAMOFOX_BLOCKED"
         else:
@@ -59,7 +61,10 @@ async def fetch_reviews(
             last_warning = "CAMOFOX_NO_RESULTS"
         if attempt == 0:
             await anyio.sleep(0.5)
-    return [], sorted({last_warning, "CAMOFOX_RETRIED"}), url, None, None
+    warnings = {last_warning}
+    if last_warning != "CAMOFOX_NOT_CONFIGURED":
+        warnings.add("CAMOFOX_RETRIED")
+    return [], sorted(warnings), url, None, None
 
 
 def parse_reviews(
