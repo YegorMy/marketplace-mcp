@@ -443,6 +443,48 @@ def test_yandex_modern_search_card_parsing_uses_title_zone_link():
     assert first.delivery_hint == "До 7 дней, ПВЗ"
 
 
+def test_yandex_details_uses_http_search_fallback_after_blocked_card(monkeypatch):
+    product_url = (
+        "https://market.yandex.ru/card/"
+        "mekhanicheskiye-pereklyuchateli-kailh-box-navy-klikayushchiye-110-shtuk/5694381852"
+    )
+    http_urls: list[str] = []
+
+    async def fake_load_html(self, query, url, strategy="auto", fixture_html=None):
+        if url == product_url:
+            return OZON_NO_JS_CHALLENGE_HTML, []
+        return None, ["UNEXPECTED_LOAD"]
+
+    async def fake_fetch_with_http(self, url):
+        http_urls.append(url)
+        if url == "https://market.yandex.ru/search?text=5694381852&local-offers-first=0":
+            return YANDEX_MODERN_SEARCH_HTML
+        return None
+
+    async def fail_camofox(self, url):
+        raise AssertionError("Yandex details should prefer direct HTTP search fallback before Camofox")
+
+    monkeypatch.setattr(YandexMarketAdapter, "_load_html", fake_load_html)
+    monkeypatch.setattr(YandexMarketAdapter, "_fetch_with_http", fake_fetch_with_http)
+    monkeypatch.setattr(YandexMarketAdapter, "_details_with_camofox", fail_camofox)
+
+    async def run():
+        return await YandexMarketAdapter().product_details(product_url, strategy="auto")
+
+    product, warnings, source_url = asyncio.run(run())
+
+    assert source_url == product_url
+    assert product is not None
+    assert product.title == "Механические переключатели Kailh Box Navy (кликающие) 110 штук"
+    assert product.price == 5833.0
+    assert product.url == product_url
+    assert product.raw is not None
+    assert product.raw["source"] == "yandex_search_result_fallback"
+    assert "CAPTCHA_OR_BLOCKED" in warnings
+    assert "YANDEX_DETAILS_SEARCH_FALLBACK" in warnings
+    assert http_urls == ["https://market.yandex.ru/search?text=5694381852&local-offers-first=0"]
+
+
 def test_wildberries_fixture_parsing():
     async def run():
         return await WildberriesAdapter().search(
@@ -822,7 +864,11 @@ def test_product_details_retries_one_empty_camofox_snapshot(monkeypatch):
         async def next_snapshot(self, _url: str):
             return next(snapshots)
 
+        async def no_search_fallback(self, _url: str, strategy: str = "auto"):
+            return None, ["OZON_DETAILS_SEARCH_NO_MATCH"]
+
         monkeypatch.setattr(OzonAdapter, "_fetch_with_hive_web", blocked_hive)
+        monkeypatch.setattr(OzonAdapter, "_details_from_search_result", no_search_fallback)
         monkeypatch.setattr(OzonAdapter, "_fetch_with_camofox", next_snapshot)
         return await OzonAdapter().product_details(
             "https://www.ozon.ru/product/namatrasnik-60x120h15sm-belyy-750317510/"

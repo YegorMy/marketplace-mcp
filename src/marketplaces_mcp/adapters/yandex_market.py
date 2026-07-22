@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 
@@ -15,6 +15,36 @@ class YandexMarketAdapter(BaseAdapter):
     search_url_template = "https://market.yandex.ru/search?text={query}&local-offers-first=0"
     discovery_domain = "market.yandex.ru/card"
     product_url_patterns = (r"https://market\.yandex\.ru/(?:card|product--)/[^/?#]+/\d+/?$",)
+
+    async def product_details(
+        self,
+        url: str,
+        strategy: str = "auto",
+        fixture_html: str | None = None,
+    ) -> tuple[ProductResult | None, list[str], str]:
+        if strategy == "fixture":
+            return await super().product_details(url=url, strategy=strategy, fixture_html=fixture_html)
+
+        html, warnings = await self._load_html(
+            query=url,
+            url=url,
+            strategy=strategy,
+            fixture_html=fixture_html,
+        )
+        if html and not self._is_blocked(html):
+            product = self.parse_product_details(html, url=url)
+            if product is not None:
+                return product, sorted(set(warnings)), url
+            warnings.append("YANDEX_DETAILS_DIRECT_NO_RESULTS")
+        elif html:
+            warnings.extend(["CAPTCHA_OR_BLOCKED", "HIVE_WEB_BLOCKED"])
+
+        recovered, recovery_warnings = await self._details_from_search_result(url)
+        if recovered is not None:
+            return recovered, sorted(set(warnings + recovery_warnings)), url
+
+        fallback, fallback_warnings = await self._details_with_camofox(url)
+        return fallback, sorted(set(warnings + recovery_warnings + fallback_warnings)), url
 
     async def search(
         self,
@@ -190,6 +220,45 @@ class YandexMarketAdapter(BaseAdapter):
             confidence=0.95 if price is not None else 0.7,
             raw={"source": "rendered_product_page", "evidence_excerpt": body[:10000]},
         )
+
+    async def _details_from_search_result(self, url: str) -> tuple[ProductResult | None, list[str]]:
+        card_id = _card_id(url)
+        query = card_id or _query_from_card_url(url)
+        if not query:
+            return None, ["YANDEX_DETAILS_SEARCH_QUERY_UNAVAILABLE"]
+
+        search_url = self.build_search_url(query)
+        try:
+            html = await self._fetch_with_http(search_url)
+        except Exception:
+            return None, ["YANDEX_DETAILS_SEARCH_FAILED"]
+        if not html:
+            return None, ["YANDEX_DETAILS_SEARCH_NO_FETCH"]
+
+        expected_url = self.normalize_product_url(url)
+        for product in self.parse_search_results(html, query=query):
+            candidate_id = _card_id(product.url)
+            if product.url != expected_url and (not card_id or candidate_id != card_id):
+                continue
+            product.url = expected_url
+            product.confidence = min(product.confidence or 0.85, 0.85)
+            product.raw = {**(product.raw or {}), "source": "yandex_search_result_fallback"}
+            return product, ["YANDEX_DETAILS_SEARCH_FALLBACK"]
+
+        if self._is_blocked(html):
+            return None, ["YANDEX_DETAILS_SEARCH_BLOCKED"]
+        return None, ["YANDEX_DETAILS_SEARCH_NO_MATCH"]
+
+
+def _card_id(url: str) -> str | None:
+    tail = urlsplit(url).path.rstrip("/").split("/")[-1]
+    return tail if tail.isdigit() else None
+
+
+def _query_from_card_url(url: str) -> str:
+    parts = [part for part in urlsplit(url).path.strip("/").split("/") if part]
+    slug = parts[-2] if len(parts) >= 2 and parts[-1].isdigit() else (parts[-1] if parts else "")
+    return re.sub(r"[-_]+", " ", slug).strip()
 
 
 def _select_text(node, selectors: list[str]) -> str:
