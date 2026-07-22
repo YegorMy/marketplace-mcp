@@ -16,7 +16,7 @@ def normalize_title(value: object) -> str:
     return text
 
 
-_PRICE_RE = re.compile(r"\d[\d\s\u00a0.,]*\d")
+_PRICE_RE = re.compile(r"\d[\d.,]*\d|\d")
 
 
 def parse_price(value: object) -> float | None:
@@ -27,7 +27,7 @@ def parse_price(value: object) -> float | None:
     text = str(value).strip()
     if not text:
         return None
-    normalized = text.replace("\xa0", " ").replace(" ", "")
+    normalized = re.sub(r"[\s\u00a0\u2000-\u200f\u202f\u205f\u3000]", "", text)
     match = _PRICE_RE.search(normalized)
     if not match:
         return None
@@ -77,7 +77,7 @@ def extract_numeric_tokens(value: str) -> set[str]:
 
 
 def _canonical_number(raw: str) -> str:
-    normalized = raw.replace(" ", "").replace("\xa0", "").replace(",", ".")
+    normalized = re.sub(r"[\s\u00a0\u2000-\u200f\u202f\u205f\u3000]", "", raw).replace(",", ".")
     if normalized.count(".") > 1:
         parts = normalized.split(".")
         normalized = "".join(parts[:-1]) + "." + parts[-1]

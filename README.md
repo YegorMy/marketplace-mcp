@@ -64,6 +64,29 @@ canonical product links. Such results always have no verified price and include
 as current marketplace data. Avito is excluded from default retail search and
 comparison because each used listing is a unique physical item.
 
+Runtime settings can also live in `~/.config/marketplaces-mcp/config.json` or in the path from `MARKETPLACES_CONFIG`:
+
+```json
+{
+  "web_backend": "hive_web",
+  "hive_web_max_tokens": 12000,
+  "browser_channel": "chrome",
+  "browser_headless": true,
+  "browser_locale": "ru-RU",
+  "browser_timezone": "Europe/Moscow",
+  "browser_args": ["--disable-blink-features=AutomationControlled"],
+  "browser_default_user_agent": true,
+  "proxies": {
+    "ozon": "http://user:password@proxy.example:19081",
+    "yandex_market": null
+  }
+}
+```
+
+Per-marketplace proxy values are only applied to that marketplace. When a proxy is configured for a marketplace, the adapter skips Hive Web for that marketplace and uses the proxied Playwright/httpx path. Use an HTTP proxy with authentication for browser-heavy marketplaces because Chromium/Playwright does not support authenticated SOCKS5 proxies. Environment variables override file values: `MARKETPLACES_PROXY_OZON_URL`, `MARKETPLACES_OZON_PROXY_URL`, `OZON_PROXY_URL`, `MARKETPLACES_PROXY_YANDEX_MARKET_URL`, `MARKETPLACES_YANDEX_MARKET_PROXY_URL`, `YANDEX_MARKET_PROXY_URL`.
+
+Ozon is rendered with JavaScript enabled. When an Ozon proxy is configured, the Ozon adapter keeps Playwright headful even if `browser_headless` is true, because Ozon is stricter in headless mode. Disabling JavaScript is not a useful fallback: Ozon returns an anti-bot challenge asking the browser to enable JavaScript, and the adapter reports it as `CAPTCHA_OR_BLOCKED`.
+
 ## Requirements
 
 - Python 3.11+

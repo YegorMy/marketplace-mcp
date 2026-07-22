@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from pathlib import Path
 
 import pytest
 
 from marketplaces_mcp.adapters import AvitoAdapter, OzonAdapter, WildberriesAdapter, YandexMarketAdapter
-from marketplaces_mcp.core.config import Settings
+from marketplaces_mcp.core.config import Settings, get_settings
 
 
 OZON_FIXTURE_HTML = """
@@ -18,6 +19,37 @@ OZON_FIXTURE_HTML = """
     <div class="tile-hover-card__rating">4,7</div>
     <span class="tile-hover-card__reviews">125 отзывов</span>
     <img src="https://ozon.example/image.png" />
+  </div>
+</body></html>
+"""
+
+OZON_BLOCKED_HTML = """
+<html><body>
+  <div>Антибот-инцидент: доступ временно заблокирован. Пожалуйста, подтвердите, что вы не робот.</div>
+</body></html>
+"""
+
+OZON_NO_JS_CHALLENGE_HTML = """
+<html><head><title>Antibot Challenge Page</title></head><body>
+  <h2>Пожалуйста, включите JavaScript для продолжения</h2>
+  <span>Нам нужно убедиться, что вы не робот.</span>
+  <h2>Please, enable JavaScript to continue</h2>
+</body></html>
+"""
+
+OZON_MODERN_TILE_HTML = """
+<html><body>
+  <div class="tile-root">
+    <a href="/product/svetocopy-a4-500-l-bumaga-dlya-printera-7969279/?at=token"><img src="https://ir.ozone.ru/a.jpg" /></a>
+    <span>445 ₽</span><span>499 ₽</span><span>−10%</span>
+    <a href="/product/svetocopy-a4-500-l-bumaga-dlya-printera-7969279/?at=token"><span>SvetoCopy A4 500 л Бумага для принтера</span></a>
+    <span>4.8</span><span>696 830</span><span>Ozon</span>
+  </div>
+  <div class="tile-root">
+    <a href="/product/ilim-standart-5-sht-a4-500-l-bumaga-dlya-printera-2973763863/?at=token"><span>Распродажа</span></a>
+    <span>1 751 ₽</span><span>2 629 ₽</span><span>350 ₽ / шт</span>
+    <a href="/product/ilim-standart-5-sht-a4-500-l-bumaga-dlya-printera-2973763863/?at=token"><span>ИЛИМ Стандарт 5 шт A4 500 л Бумага для принтера</span></a>
+    <span>4.8</span><span>36 521</span><span>Ozon</span>
   </div>
 </body></html>
 """
@@ -183,6 +215,98 @@ def test_ozon_fixture_parsing():
     assert product.rating == 4.7
     assert product.reviews_count == 125
     assert product.url.endswith("/product/abc")
+
+
+def test_ozon_fixture_blocked_returns_captcha_warning():
+    async def run():
+        adapter = OzonAdapter()
+        results, warnings, _ = await adapter.search(
+            query="бумага",
+            limit=3,
+            strategy="fixture",
+            fixture_html=OZON_BLOCKED_HTML,
+        )
+        return results, warnings
+
+    results, warnings = asyncio.run(run())
+    assert warnings == ["CAPTCHA_OR_BLOCKED"]
+    assert len(results) == 0
+
+
+def test_ozon_no_javascript_challenge_returns_captcha_warning():
+    async def run():
+        adapter = OzonAdapter()
+        results, warnings, _ = await adapter.search(
+            query="бумага",
+            limit=3,
+            strategy="fixture",
+            fixture_html=OZON_NO_JS_CHALLENGE_HTML,
+        )
+        return results, warnings
+
+    results, warnings = asyncio.run(run())
+    assert warnings == ["CAPTCHA_OR_BLOCKED"]
+    assert len(results) == 0
+
+
+def test_ozon_modern_tile_parsing_prefers_product_title_over_badges():
+    async def run():
+        adapter = OzonAdapter()
+        results, warnings, _ = await adapter.search(
+            query="бумага",
+            limit=3,
+            strategy="fixture",
+            fixture_html=OZON_MODERN_TILE_HTML,
+        )
+        return results, warnings
+
+    results, warnings = asyncio.run(run())
+
+    assert not warnings
+    assert len(results) == 2
+    assert results[0].title == "SvetoCopy A4 500 л Бумага для принтера"
+    assert results[0].url == "https://www.ozon.ru/product/svetocopy-a4-500-l-bumaga-dlya-printera-7969279/"
+    assert results[0].price == 445
+    assert results[1].title == "ИЛИМ Стандарт 5 шт A4 500 л Бумага для принтера"
+    assert results[1].title != "Распродажа"
+    assert results[1].price == 1751
+
+
+def test_ozon_playwright_uses_headful_when_proxy_configured():
+    adapter = OzonAdapter(Settings(proxies={"ozon": "http://127.0.0.1:8080", "yandex_market": ""}, browser_headless=True))
+    assert adapter._playwright_headless() is False
+
+
+def test_ozon_playwright_uses_global_headless_without_proxy():
+    adapter = OzonAdapter(Settings(proxies={"ozon": "", "yandex_market": ""}, browser_headless=True))
+    assert adapter._playwright_headless() is True
+
+
+def test_playwright_options_include_browser_config():
+    adapter = OzonAdapter(
+        Settings(
+            proxies={"ozon": "http://127.0.0.1:8080"},
+            browser_headless=True,
+            browser_channel="chrome",
+            browser_args=["--disable-blink-features=AutomationControlled"],
+            browser_locale="ru-RU",
+            browser_timezone="Europe/Moscow",
+            browser_default_user_agent=True,
+        )
+    )
+
+    assert adapter._playwright_launch_options() == {
+        "headless": False,
+        "proxy": {"server": "http://127.0.0.1:8080"},
+        "channel": "chrome",
+        "args": ["--disable-blink-features=AutomationControlled"],
+    }
+    assert adapter._playwright_context_options() == {
+        "java_script_enabled": True,
+        "locale": "ru-RU",
+        "timezone_id": "Europe/Moscow",
+    }
+    assert adapter._playwright_settle_timeout_ms() == 3000
 
 
 def test_yandex_fixture_parsing():
@@ -620,3 +744,97 @@ def test_fixture_strategy_bypasses_hive_web(monkeypatch):
     assert not warnings
     assert calls == 0
     assert len(results) == 2
+
+
+def test_config_file_loads_per_marketplace_proxies(tmp_path, monkeypatch):
+    config_path = tmp_path / "marketplaces.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "web_backend": "auto",
+                "hive_web_max_tokens": 4321,
+                "browser_headless": False,
+                "browser_channel": "chrome",
+                "browser_args": ["--disable-blink-features=AutomationControlled"],
+                "browser_locale": "ru-RU",
+                "browser_timezone": "Europe/Moscow",
+                "browser_default_user_agent": True,
+                "proxies": {
+                    "ozon": "socks5h://user:pass@example.test:19080",
+                    "yandex_market": None,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MARKETPLACES_CONFIG", str(config_path))
+
+    settings = get_settings()
+
+    assert settings.config_path == config_path
+    assert settings.web_backend == "auto"
+    assert settings.hive_web_max_tokens == 4321
+    assert settings.browser_headless is False
+    assert settings.browser_channel == "chrome"
+    assert settings.browser_args == ["--disable-blink-features=AutomationControlled"]
+    assert settings.browser_locale == "ru-RU"
+    assert settings.browser_timezone == "Europe/Moscow"
+    assert settings.browser_default_user_agent is True
+    assert settings.proxy_url_for("ozon") == "socks5h://user:pass@example.test:19080"
+    assert settings.proxy_url_for("yandex_market") is None
+
+
+def test_proxy_env_overrides_config_file(tmp_path, monkeypatch):
+    config_path = tmp_path / "marketplaces.json"
+    config_path.write_text(
+        json.dumps({"proxies": {"ozon": "socks5://config.example:1080"}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MARKETPLACES_CONFIG", str(config_path))
+    monkeypatch.setenv("MARKETPLACES_PROXY_OZON_URL", "socks5h://env.example:19080")
+
+    assert get_settings().proxy_url_for("ozon") == "socks5h://env.example:19080"
+
+
+def test_ozon_proxy_skips_hive_web_even_when_backend_is_hive_web(monkeypatch):
+    async def run():
+        calls = {"hive": 0, "playwright": 0, "http": 0}
+
+        async def failing_hive_web(self, _url: str):
+            calls["hive"] += 1
+            raise AssertionError("hive web should not run when marketplace proxy is configured")
+
+        async def proxied_playwright(self, _url: str):
+            calls["playwright"] += 1
+            return OZON_FIXTURE_HTML
+
+        async def fallback_http(self, _url: str):
+            calls["http"] += 1
+            return None
+
+        monkeypatch.setattr(OzonAdapter, "_fetch_with_hive_web", failing_hive_web)
+        monkeypatch.setattr(OzonAdapter, "_fetch_with_playwright", proxied_playwright)
+        monkeypatch.setattr(OzonAdapter, "_fetch_with_http", fallback_http)
+
+        adapter = OzonAdapter(
+            Settings(web_backend="hive_web", proxies={"ozon": "socks5h://user:pass@127.0.0.1:19080"})
+        )
+        results, warnings, _ = await adapter.search(query="бумага", limit=3, strategy="auto")
+        return results, warnings, calls
+
+    results, warnings, calls = asyncio.run(run())
+    assert not warnings
+    assert calls == {"hive": 0, "playwright": 1, "http": 0}
+    assert len(results) == 1
+
+
+def test_playwright_proxy_normalizes_socks5h_and_credentials():
+    adapter = OzonAdapter(
+        Settings(proxies={"ozon": "socks5h://user:p%40ss@[2001:db8::1]:19080"})
+    )
+
+    assert adapter._playwright_proxy() == {
+        "server": "socks5://[2001:db8::1]:19080",
+        "username": "user",
+        "password": "p@ss",
+    }

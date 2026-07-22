@@ -5,6 +5,10 @@ def test_parse_price_rub_with_spaces():
     assert parse_price("12 990 ₽") == 12990
 
 
+def test_parse_price_rub_with_thin_spaces():
+    assert parse_price("1\u2009751\u2009₽") == 1751
+
+
 def test_parse_price_comma_decimal():
     assert parse_price("1 234,56") == 1234.56
 

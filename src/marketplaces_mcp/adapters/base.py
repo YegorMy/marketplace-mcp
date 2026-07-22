@@ -7,7 +7,7 @@ import uuid
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote_plus, urlsplit, urlunsplit
+from urllib.parse import quote_plus, unquote, urlsplit, urlunsplit
 
 import anyio
 import httpx
@@ -20,10 +20,12 @@ from marketplaces_mcp.core.normalize import parse_price
 
 _BLOCKED_MARKERS = (
     "captcha",
-    "robot",
+    "anti-bot",
     "you are human",
     "подтвердите что вы человек",
     "check you are not a robot",
+    "пожалуйста, включите javascript для продолжения",
+    "please, enable javascript to continue",
     "похоже, нет соединения",
     "выключите vpn",
     "инцидент:",
@@ -34,6 +36,9 @@ _BLOCKED_MARKERS = (
     "проблема с ip",
     "для решения капчи",
     "отключить vpn",
+    "access denied",
+    "forbidden",
+    "cloudflare",
 )
 
 
@@ -102,10 +107,10 @@ class BaseAdapter(ABC):
             offers, discovery_warnings = await self._discover_indexed(query, limit)
             return offers, sorted(set(warnings + recovery_warnings + discovery_warnings)), search_url
         if self._is_blocked(html):
-            warnings.append("HIVE_WEB_BLOCKED")
             if strategy == "fixture":
                 warnings.append("CAPTCHA_OR_BLOCKED")
                 return [], sorted(set(warnings)), search_url
+            warnings.append("HIVE_WEB_BLOCKED")
             recovered, recovery_warnings = await self._search_with_camofox(search_url, query)
             if recovered:
                 return recovered[:limit], sorted(set(warnings + recovery_warnings)), search_url
@@ -146,10 +151,10 @@ class BaseAdapter(ABC):
             recovered, recovery_warnings = await self._details_with_camofox(url)
             return recovered, sorted(set(warnings + recovery_warnings)), url
         if self._is_blocked(html):
-            warnings.append("HIVE_WEB_BLOCKED")
             if strategy == "fixture":
                 warnings.append("CAPTCHA_OR_BLOCKED")
                 return None, sorted(set(warnings)), url
+            warnings.append("HIVE_WEB_BLOCKED")
             recovered, recovery_warnings = await self._details_with_camofox(url)
             if recovered is not None:
                 return recovered, sorted(set(warnings + recovery_warnings)), url
@@ -184,7 +189,8 @@ class BaseAdapter(ABC):
             warnings.append("FIXTURE_NOT_FOUND")
             return None, warnings
 
-        if self.settings.web_backend in {"hive_web", "auto"}:
+        use_hive_web = self.settings.web_backend in {"hive_web", "auto"} and not self._proxy_url()
+        if use_hive_web:
             try:
                 html = await self._fetch_with_hive_web(url)
                 if html:
@@ -198,7 +204,8 @@ class BaseAdapter(ABC):
                 if self.settings.web_backend == "hive_web":
                     return None, warnings
 
-        if self.settings.web_backend in {"auto", "legacy"}:
+        use_legacy = self.settings.web_backend in {"auto", "legacy"} or bool(self._proxy_url())
+        if use_legacy:
             try:
                 html = await self._fetch_with_playwright(url)
                 if html:
@@ -236,10 +243,12 @@ class BaseAdapter(ABC):
             "User-Agent": self.settings.user_agent,
             "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
         }
+        proxy_url = self._proxy_url()
         async with httpx.AsyncClient(
             headers=headers,
             timeout=self.settings.request_timeout,
             follow_redirects=True,
+            proxy=proxy_url,
         ) as client:
             response = await client.get(url)
             if response.status_code >= 400:
@@ -325,19 +334,44 @@ class BaseAdapter(ABC):
             return None
 
         async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch(headless=True)
-            context = await browser.new_context(
-                user_agent=self.settings.user_agent,
-                java_script_enabled=True,
-            )
+            browser = await playwright.chromium.launch(**self._playwright_launch_options())
+            context = await browser.new_context(**self._playwright_context_options())
             page = await context.new_page()
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=120000)
-                await page.wait_for_timeout(800)
+                await page.wait_for_timeout(self._playwright_settle_timeout_ms())
                 return await page.content()
             finally:
                 await context.close()
                 await browser.close()
+
+    def _playwright_launch_options(self) -> dict[str, Any]:
+        options: dict[str, Any] = {
+            "headless": self._playwright_headless(),
+            "proxy": self._playwright_proxy(),
+        }
+        if self.settings.browser_channel:
+            options["channel"] = self.settings.browser_channel
+        if self.settings.browser_args:
+            options["args"] = self.settings.browser_args
+        return options
+
+    def _playwright_context_options(self) -> dict[str, Any]:
+        options: dict[str, Any] = {"java_script_enabled": True}
+        if not self.settings.browser_default_user_agent:
+            options["user_agent"] = self.settings.user_agent
+        if self.settings.browser_locale:
+            options["locale"] = self.settings.browser_locale
+        if self.settings.browser_timezone:
+            options["timezone_id"] = self.settings.browser_timezone
+        return options
+
+    def _playwright_settle_timeout_ms(self) -> int:
+        return 3000 if not self._playwright_headless() else 800
+
+    def _playwright_headless(self) -> bool:
+        return self.settings.browser_headless
+
 
     def build_search_url(self, query: str) -> str:
         return self.search_url_template.format(query=quote_plus(query))
@@ -446,6 +480,30 @@ class BaseAdapter(ABC):
         if not fixture_path.exists():
             return None
         return fixture_path.read_text(encoding="utf-8")
+
+    def _proxy_url(self) -> str | None:
+        return self.settings.proxy_url_for(self.marketplace)
+
+    def _playwright_proxy(self) -> dict[str, str] | None:
+        proxy_url = self._proxy_url()
+        if not proxy_url:
+            return None
+
+        parsed = urlsplit(proxy_url)
+        if not parsed.scheme or not parsed.hostname:
+            return {"server": proxy_url}
+
+        scheme = "socks5" if parsed.scheme.lower() == "socks5h" else parsed.scheme
+        host = parsed.hostname
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        netloc = host if parsed.port is None else f"{host}:{parsed.port}"
+        proxy: dict[str, str] = {"server": urlunsplit((scheme, netloc, "", "", ""))}
+        if parsed.username:
+            proxy["username"] = unquote(parsed.username)
+        if parsed.password:
+            proxy["password"] = unquote(parsed.password)
+        return proxy
 
     @staticmethod
     def parse_jsonld_offers(html: str) -> list[dict[str, Any]]:

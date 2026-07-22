@@ -743,7 +743,7 @@ dependencies = [
     { name = "beautifulsoup4" },
     { name = "ddgs" },
     { name = "hive-web-runtime" },
-    { name = "httpx" },
+    { name = "httpx", extra = ["socks"] },
     { name = "mcp" },
     { name = "pydantic" },
 ]
@@ -760,7 +760,7 @@ requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.12.0" },
     { name = "ddgs", specifier = ">=9.8.0,<10" },
     { name = "hive-web-runtime", git = "https://github.com/YegorMy/hive-web.git" },
-    { name = "httpx", specifier = ">=0.27.0" },
+    { name = "httpx", extras = ["socks"], specifier = ">=0.27.0" },
     { name = "mcp", specifier = ">=1.3" },
     { name = "pydantic", specifier = ">=2.7.0" },
 ]

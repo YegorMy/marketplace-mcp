@@ -10,6 +10,9 @@ from marketplaces_mcp.core.models import ProductResult
 from marketplaces_mcp.core.normalize import parse_price
 
 
+_PROMO_LINK_TEXTS = {"распродажа", "оригинал"}
+
+
 class OzonAdapter(BaseAdapter):
     marketplace = "ozon"
     search_url_template = "https://www.ozon.ru/search/?text={query}"
@@ -28,33 +31,22 @@ class OzonAdapter(BaseAdapter):
         if not cards:
             cards = [soup]
 
+        seen: set[tuple[str, str]] = set()
         for card in cards:
-            title = _select_text(
-                card,
-                [
-                    "a[href][title]",
-                    "a.tile-hover-card__title",
-                    "h3",
-                    "[data-widget='searchResultsV2'] [title]",
-                ],
-            )
+            product_link = _select_product_link(card)
+            title = _select_ozon_title(card, product_link)
             if not title:
                 continue
 
-            url = _first_attr(
-                card,
-                [
-                    "a[href][title]",
-                    "a.tile-hover-card__title",
-                    "a",
-                ],
-                "href",
-            ) or ""
-            if url:
-                url = urljoin("https://www.ozon.ru", url)
-                url = self.normalize_product_url(url)
-            if not self.is_product_url(url):
+            href = _product_href(product_link)
+            href = self.normalize_product_url(href)
+            if not self.is_product_url(href):
                 continue
+
+            key = (title, href)
+            if key in seen:
+                continue
+            seen.add(key)
 
             price = _select_price(card)
             rating = _select_float(card, ["span[title*='рейтинг']", ".tile-hover-card__rating"])
@@ -69,7 +61,7 @@ class OzonAdapter(BaseAdapter):
                 ProductResult(
                     marketplace=self.marketplace,
                     title=title,
-                    url=url,
+                    url=href,
                     price=price,
                     old_price=_select_price(card, selectors=[".old", ".old-price", ".discount-price"]),
                     currency="RUB",
@@ -146,6 +138,10 @@ class OzonAdapter(BaseAdapter):
             raw={"source": "rendered_product_page", "evidence_excerpt": body[:10000]},
         )
 
+    def _playwright_headless(self) -> bool:
+        # Ozon is often stricter in headless mode; keep rendering headful when proxy is configured.
+        return self.settings.browser_headless and self._proxy_url() is None
+
 
 def _select_text(node, selectors: list[str]) -> str:
     for selector in selectors:
@@ -155,6 +151,65 @@ def _select_text(node, selectors: list[str]) -> str:
             if text:
                 return text
     return ""
+
+
+def _select_ozon_title(node, product_link=None) -> str:
+    candidates: list[str] = []
+    if product_link is not None:
+        text = _clean_text(product_link.get("title") or product_link.get_text(" ", strip=True))
+        if _looks_like_product_title(text):
+            return text
+
+    for link in node.select("a[href*='/product/']"):
+        text = _clean_text(link.get("title") or link.get_text(" ", strip=True))
+        if _looks_like_product_title(text):
+            candidates.append(text)
+
+    if candidates:
+        return max(candidates, key=len)
+
+    return _select_text(
+        node,
+        [
+            "a[href][title]",
+            "a.tile-hover-card__title",
+            "h3",
+            "[data-widget='searchResultsV2'] [title]",
+            "[title][href]",
+        ],
+    )
+
+
+def _select_product_link(node):
+    selectors = [
+        "a[href*='/product/'][title]",
+        "a.tile-hover-card__title[href]",
+        "a[href*='/product/']",
+        "a[href][title]",
+    ]
+    for selector in selectors:
+        found = node.select_one(selector)
+        if found and found.get("href"):
+            return found
+    return None
+
+
+def _product_href(link) -> str:
+    if link is None:
+        return ""
+    href = link.get("href")
+    if not isinstance(href, str) or not href.strip():
+        return ""
+    return urljoin("https://www.ozon.ru", href.strip()).split("?")[0]
+
+
+def _looks_like_product_title(text: str) -> bool:
+    lowered = text.lower().strip()
+    return len(text) > 12 and "₽" not in text and lowered not in _PROMO_LINK_TEXTS
+
+
+def _clean_text(value: object) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
 def _first_attr(node, selectors: list[str], attr: str) -> str | None:
@@ -169,24 +224,44 @@ def _first_attr(node, selectors: list[str], attr: str) -> str | None:
 
 def _select_price(node, selectors: list[str] | None = None) -> float | None:
     explicit_selectors = selectors is not None
+    if selectors is None:
+        span_price = _first_span_price(node)
+        if span_price is not None:
+            return span_price
+
     selectors = selectors or [
         ".tile-hover-card__price",
         ".price",
-        ".ts-caption-2",
         "[data-item-price]",
-        "span",
     ]
     for selector in selectors:
-        found = node.select_one(selector)
-        if found:
+        for found in node.select(selector):
             text = found.get_text(" ", strip=True)
+            if not text:
+                value = found.get("data-item-price")
+                text = str(value or "")
+            if "₽" in text and "/ шт" in text.lower():
+                continue
+            if selector == "span" and "₽" not in text:
+                continue
             parsed = parse_price(text)
             if parsed is not None:
                 return parsed
     if explicit_selectors:
         return None
-    fallback = node.get_text(" ", strip=True)
-    return parse_price(re.search(r"\d[\d\s.,]*\d\s*[₽rubRUBrub.]*", fallback).group(0) if re.search(r"\d[\d\s.,]*\d", fallback) else "")
+    return parse_price(node.get_text(" ", strip=True))
+
+
+def _first_span_price(node) -> float | None:
+    for span in node.select("span"):
+        text = span.get_text(" ", strip=True)
+        lowered = text.lower()
+        if "₽" not in text or "/ шт" in lowered:
+            continue
+        parsed = parse_price(text)
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def _extract_current_price(text: str) -> float | None:
