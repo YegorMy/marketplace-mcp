@@ -17,6 +17,10 @@ from bs4 import BeautifulSoup
 from marketplaces_mcp.core.ozon_tours_browser import OzonToursBrowser, USER_ID, _PAGE_EVIDENCE
 
 SEARCH = "https://www.ozon.ru/travel/tours/search"
+_CONTEXT_KEYS = {"Dlts", "Children", "fromCity", "toCountry", "startDate",
+                 "minNight", "maxNight", "mealTypes"}
+_TRACKING_KEYS = {"mwc_campaign", "__rr", "utm_source", "utm_medium", "utm_campaign",
+                  "utm_term", "utm_content"}
 MEALS = {"ozon_ai": "Всё включено", "ozon_sai": "Всё включено с ограничениями",
          "ozon_aip": "Премиум всё включено", "ozon_uai": "Ультра всё включено"}
 _CAPTURE = """(() => ({url:location.href,
@@ -29,13 +33,16 @@ _CAPTURE = """(() => ({url:location.href,
 }))()"""
 
 
-def build_search_url(origin="LED", destination="ОАЭ", departure_date="", min_nights=5,
-                     max_nights=9, adults=2, child_ages=None, rooms=1, all_inclusive_only=True):
-    if origin.casefold().strip() not in {"led", "санкт-петербург", "санкт петербург"}:
-        raise ValueError("Only Saint Petersburg is currently verified")
-    if destination.casefold().strip() not in {"оаэ", "uae", "united arab emirates"}:
-        raise ValueError("Only UAE is currently verified")
+class TourRouteLookupRequired(ValueError):
+    """A name has no verified provider ID; an Ozon search link can supply it."""
+
+
+def _validate_trip(departure_date, min_nights, max_nights, adults, child_ages, rooms):
+    if not isinstance(departure_date, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", departure_date):
+        raise ValueError("Use an ISO departure date")
     date.fromisoformat(departure_date)
+    if any(type(value) is not int for value in (min_nights, max_nights, adults, rooms)):
+        raise ValueError("Guest, room and night counts must be integers")
     if not 2 <= min_nights <= max_nights <= 21 or max_nights - min_nights > 4:
         raise ValueError("Use at most five stay lengths per call, e.g. 5–9 and 10–12")
     ages = list(child_ages or [])
@@ -43,28 +50,65 @@ def build_search_url(origin="LED", destination="ОАЭ", departure_date="", min_
         raise ValueError("One room, 1–6 adults and at most three children are supported")
     if any(type(age) is not int or not 0 <= age <= 16 for age in ages):
         raise ValueError("Exact ages at trip end are required (0 means under one year)")
+    return ages
+
+
+def build_search_url(origin="LED", destination="ОАЭ", departure_date="", min_nights=5,
+                     max_nights=9, adults=2, child_ages=None, rooms=1, all_inclusive_only=True):
+    ages = _validate_trip(departure_date, min_nights, max_nights, adults, child_ages, rooms)
+    if origin.casefold().strip() not in {"led", "санкт-петербург", "санкт петербург"}:
+        raise TourRouteLookupRequired("Use an Ozon search link for this departure city")
+    if destination.casefold().strip() not in {"оаэ", "uae", "united arab emirates"}:
+        raise TourRouteLookupRequired("Use an Ozon search link for this destination")
     params = dict(Dlts=adults, fromCity="140212000", toCountry="210915000",
                   startDate=departure_date, minNight=min_nights, maxNight=max_nights)
     if ages:
         params["Children"] = ",".join(map(str, ages))
     if all_inclusive_only:
         params["mealTypes"] = ",".join(sorted(MEALS))
-    return SEARCH + "?" + urlencode(params)
+    return canonical_search_url(SEARCH + "?" + urlencode(params))
 
 
 def search_context(url):
     u = urlsplit(url)
-    if u.scheme != "https" or u.hostname != "www.ozon.ru" or u.path.rstrip("/") != "/travel/tours/search":
+    if (u.scheme != "https" or u.netloc != "www.ozon.ru" or u.fragment
+            or u.path.rstrip("/") != "/travel/tours/search"):
         raise ValueError("Expected an Ozon package search URL")
-    raw = parse_qs(u.query)
-    keys = ("Dlts", "Children", "fromCity", "toCountry", "startDate", "minNight", "maxNight", "mealTypes")
-    if any(len(raw.get(k, [])) > 1 for k in keys):
+    raw = parse_qs(u.query, keep_blank_values=True, strict_parsing=True, max_num_fields=32)
+    if raw.keys() - _CONTEXT_KEYS - _TRACKING_KEYS:
+        raise ValueError("Unsupported search parameters; do not discard trip filters")
+    required = _CONTEXT_KEYS - {"Children", "mealTypes"}
+    if not required <= raw.keys():
+        raise ValueError("Incomplete search context")
+    if any(len(raw.get(k, [])) > 1 for k in _CONTEXT_KEYS):
         raise ValueError("Ambiguous search context")
-    result = {k: raw[k][0] for k in keys if k in raw}
+    result = {k: raw[k][0] for k in sorted(_CONTEXT_KEYS) if k in raw}
+    for key in ("fromCity", "toCountry"):
+        if not re.fullmatch(r"[1-9][0-9]{0,17}", result[key]):
+            raise ValueError("Invalid Ozon location identifier")
+    for key in ("Dlts", "minNight", "maxNight"):
+        if not re.fullmatch(r"[0-9]{1,2}", result[key]):
+            raise ValueError("Invalid guest or night count")
+        result[key] = str(int(result[key]))
+    ages = []
+    if "Children" in result:
+        if not re.fullmatch(r"[0-9]{1,2}(?:,[0-9]{1,2}){0,2}", result["Children"]):
+            raise ValueError("Invalid child ages")
+        ages = [int(value) for value in result["Children"].split(",")]
+        result["Children"] = ",".join(map(str, sorted(ages)))
+    _validate_trip(result["startDate"], int(result["minNight"]), int(result["maxNight"]),
+                   int(result["Dlts"]), ages, 1)
+    if "mealTypes" in result and not set(result["mealTypes"].split(",")) <= MEALS.keys():
+        raise ValueError("Unsupported meal filter")
     for k in ("Children", "mealTypes"):
         if k in result:
             result[k] = ",".join(sorted(result[k].split(",")))
     return result
+
+
+def canonical_search_url(url):
+    """Use the route encoded by Ozon, preserving every supported trip filter."""
+    return SEARCH + "?" + urlencode(search_context(url))
 
 
 def parse_leads(data, expected_url, limit=10):
@@ -92,6 +136,7 @@ def parse_rates(data, expected_url, hotel_name, all_inclusive_only=True, limit=2
         raise ValueError("Expected Ozon package room-selection page")
     query = parse_qs(u.query)
     context = search_context(expected_url)
+    selected_meals = {MEALS[code] for code in context.get("mealTypes", "").split(",") if code}
     nested = query.get("searchRawQuery", [])
     if len(nested) != 1 or search_context(SEARCH + "?" + nested[0]) != context:
         raise ValueError("Room page belongs to a different trip")
@@ -112,6 +157,8 @@ def parse_rates(data, expected_url, hotel_name, all_inclusive_only=True, limit=2
         # Each meal heading directly owns one list of priced operator rows.
         for heading in room.select("span.tsBodyControl400Small"):
             meal = heading.get_text(" ", strip=True)
+            if selected_meals and meal not in selected_meals:
+                continue
             if all_inclusive_only and meal not in MEALS.values():
                 continue
             group = heading.parent.parent
@@ -194,6 +241,10 @@ class OzonToursAdapter:
 
     async def search(self, *, limit=10, **kwargs):
         url = build_search_url(**kwargs)
+        return await self.search_by_url(search_url=url, limit=limit)
+
+    async def search_by_url(self, *, search_url, limit=10):
+        url = canonical_search_url(search_url)
         with self._lock():
             prior = self.access.read()
             if self.access.navigation_blocked(prior):
