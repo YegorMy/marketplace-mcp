@@ -41,6 +41,10 @@ dated total is required.
 
 Flight prices stay unknown when the page lacks the requested journey legs.
 Arrival dates use displayed day offsets; ambiguous overnight dates stay unknown.
+Indexed flight links must match the requested airport/city codes exactly: a
+Pulkovo or all-Moscow route cannot satisfy an SVO request. Index links carry no
+verified fare or dated availability. A visible Ozon Travel block stops browser
+fallback; public-index discovery can still return a matching route link.
 Hotel prices are withheld when the displayed year conflicts with the request or
 individual tariff prices cannot be separated. Meals, cancellation and payment
 terms belong to each tariff, including different tariffs with the same price.
