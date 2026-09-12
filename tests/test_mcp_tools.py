@@ -1,22 +1,24 @@
 import asyncio
 import inspect
 
-from marketplaces_mcp.mcp_server.server import REQUIRED_TOOLS
 from marketplaces_mcp.mcp_server.server import (
+    REQUIRED_TOOLS,
+    avito_search,
     marketplaces_compare,
     marketplaces_get_artifact,
     marketplaces_product_details,
     marketplaces_product_reviews,
     marketplaces_search,
-    avito_search,
-    ozon_search,
-    wildberries_search,
+    ozon_travel_flights_search,
+    ozon_travel_hotel_details,
+    ozon_travel_hotels_search,
     yandex_market_search,
 )
 
 
 def _slugify(query: str) -> str:
     import re
+
     normalized = re.sub(r"\s+", "_", str(query).strip().lower())
     normalized = re.sub(r"[^0-9а-яА-Яa-zA-ZёЁ_-]", "", normalized)
     return normalized or "default"
@@ -33,6 +35,9 @@ def test_tools_registered_and_fixture_search_works(tmp_path, monkeypatch):
         "marketplaces_product_details",
         "marketplaces_product_reviews",
         "marketplaces_get_artifact",
+        "ozon_travel_flights_search",
+        "ozon_travel_hotels_search",
+        "ozon_travel_hotel_details",
     }
     assert required.issubset(set(REQUIRED_TOOLS))
 
@@ -71,9 +76,15 @@ def test_tools_registered_and_fixture_search_works(tmp_path, monkeypatch):
             limit=5,
             strategy="fixture",
         )
-        yandex_response = await yandex_market_search(query=query, limit=2, strategy="fixture")
-        compare_response = await marketplaces_compare(query=query, limit_per_marketplace=2, strategy="fixture")
-        details_response = await marketplaces_product_details(url="https://www.ozon.ru/product/1", strategy="fixture")
+        yandex_response = await yandex_market_search(
+            query=query, limit=2, strategy="fixture"
+        )
+        compare_response = await marketplaces_compare(
+            query=query, limit_per_marketplace=2, strategy="fixture"
+        )
+        details_response = await marketplaces_product_details(
+            url="https://www.ozon.ru/product/1", strategy="fixture"
+        )
         artifact_payload = await marketplaces_get_artifact(search_response.artifact_id)
         return (
             search_response,
@@ -83,7 +94,13 @@ def test_tools_registered_and_fixture_search_works(tmp_path, monkeypatch):
             artifact_payload,
         )
 
-    search_response, yandex_response, compare_response, details_response, artifact_payload = asyncio.run(run_search())
+    (
+        search_response,
+        yandex_response,
+        compare_response,
+        details_response,
+        artifact_payload,
+    ) = asyncio.run(run_search())
     assert search_response.query == query
     assert search_response.marketplaces == ["ozon"]
     assert search_response.results
@@ -99,3 +116,6 @@ def test_tools_registered_and_fixture_search_works(tmp_path, monkeypatch):
     assert inspect.iscoroutinefunction(marketplaces_product_reviews)
     assert inspect.iscoroutinefunction(avito_search)
     assert inspect.iscoroutinefunction(marketplaces_get_artifact)
+    assert inspect.iscoroutinefunction(ozon_travel_flights_search)
+    assert inspect.iscoroutinefunction(ozon_travel_hotels_search)
+    assert inspect.iscoroutinefunction(ozon_travel_hotel_details)

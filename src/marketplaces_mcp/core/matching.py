@@ -14,6 +14,13 @@ class ProductGroup:
 
 
 def compute_offer_confidence(left: ProductResult, right: ProductResult) -> float:
+    if left.marketplace == "avito" or right.marketplace == "avito":
+        return 0.0  # Classifieds describe distinct physical units.
+    if left.game_offer or right.game_offer:
+        l, r = left.game_offer or {}, right.game_offer or {}
+        for field in ("media_format", "platform", "cartridge_data"):
+            if l.get(field) != r.get(field) or (field == "media_format" and l.get(field) in {None, "unknown"}):
+                return 0.0
     left_tokens = token_set(left.title)
     right_tokens = token_set(right.title)
     if not left_tokens or not right_tokens:

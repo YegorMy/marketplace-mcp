@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 from marketplaces_mcp.adapters.base import BaseAdapter
 from marketplaces_mcp.core.models import ProductResult
 from marketplaces_mcp.core.normalize import parse_price
+from marketplaces_mcp.core.price_evidence import price_metadata, primary_html_text
 
 
 class WildberriesAdapter(BaseAdapter):
@@ -101,6 +102,12 @@ class WildberriesAdapter(BaseAdapter):
         return None, ["WILDBERRIES_API_NO_RESULTS"]
 
     async def _fetch_wildberries_api(self, url: str) -> dict[str, Any] | None:
+        try:
+            return await self._request_wildberries_api(url)
+        except (httpx.HTTPError, ValueError):
+            return None
+
+    async def _request_wildberries_api(self, url: str) -> dict[str, Any] | None:
         async with httpx.AsyncClient(
             headers=self._wildberries_api_headers(),
             timeout=self.settings.request_timeout,
@@ -157,6 +164,7 @@ class WildberriesAdapter(BaseAdapter):
                     title=title,
                     url=url,
                     price=price,
+                    **price_metadata(text, price),
                     currency="RUB",
                     image_url=image,
                     availability="available" if re.search(r"\b(?:В корзину|Купить)\b", text, re.I) else None,
@@ -174,7 +182,7 @@ class WildberriesAdapter(BaseAdapter):
             title = str(meta.get("content") or "").strip() if meta else ""
         if not title:
             return None
-        body = soup.get_text(" ", strip=True)
+        body = primary_html_text(soup)
         image = None
         image_meta = soup.select_one("meta[property='og:image']")
         if image_meta:
@@ -185,6 +193,7 @@ class WildberriesAdapter(BaseAdapter):
             title=title,
             url=self.normalize_product_url(url),
             price=price,
+            **price_metadata(body, price),
             currency="RUB",
             image_url=image if isinstance(image, str) else None,
             availability="available" if re.search(r"\b(?:В корзину|Купить)\b", body, re.I) else None,
@@ -230,6 +239,8 @@ def _api_product_to_result(
     if not product_id or not title:
         return None
     price, old_price = _api_prices(item)
+    variant_prices = {current for current, _ in _api_variant_prices(item)}
+    price_kind = "unknown" if price is None else "from" if len(variant_prices) > 1 else "exact"
     total_quantity = _as_int(item.get("totalQuantity"))
     raw: dict[str, Any] = {"source": source, "product_id": product_id}
     if query is not None:
@@ -239,18 +250,22 @@ def _api_product_to_result(
         title=title,
         url=f"https://www.wildberries.ru/catalog/{product_id}/detail.aspx",
         price=price,
+        price_kind=price_kind,
+        price_condition="Starting price; variant prices differ" if price_kind == "from" else None,
         old_price=old_price,
         currency="RUB",
         rating=_as_float(item.get("reviewRating") or item.get("rating")),
         reviews_count=_as_int(item.get("feedbacks") or item.get("nmFeedbacks")),
-        availability="available" if total_quantity is None or total_quantity > 0 else "out_of_stock",
-        seller=str(item.get("brand") or "").strip() or None,
+        availability=("available" if total_quantity > 0 else "out_of_stock") if total_quantity is not None else None,
+        seller=str(item.get("supplier") or "").strip() or None,
         confidence=0.95 if price is not None else 0.8,
-        raw=raw,
+        raw={**raw, "brand": item.get("brand"), "region_id": -1257786,
+             "price_scope": "Displayed API variant price; wallet discount and delivery unverified"},
     )
 
 
-def _api_prices(item: dict[str, Any]) -> tuple[float | None, float | None]:
+def _api_variant_prices(item: dict[str, Any]) -> list[tuple[float, float | None]]:
+    prices = []
     for size in item.get("sizes") or []:
         if not isinstance(size, dict):
             continue
@@ -259,8 +274,15 @@ def _api_prices(item: dict[str, Any]) -> tuple[float | None, float | None]:
             continue
         current = _kopecks_to_rub(price.get("product") or price.get("sale") or price.get("total"))
         old = _kopecks_to_rub(price.get("basic"))
-        if current is not None:
-            return current, old if old and old > current else None
+        if current is not None and current > 0:
+            prices.append((current, old if old and old > current else None))
+    return prices
+
+
+def _api_prices(item: dict[str, Any]) -> tuple[float | None, float | None]:
+    variants = _api_variant_prices(item)
+    if variants:
+        return min(variants, key=lambda pair: pair[0])
     current = _kopecks_to_rub(item.get("salePriceU") or item.get("salePrice"))
     old = _kopecks_to_rub(item.get("priceU") or item.get("price"))
     return current, old if old and current and old > current else None

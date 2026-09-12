@@ -8,9 +8,10 @@ from bs4 import BeautifulSoup
 from marketplaces_mcp.adapters.base import BaseAdapter, accessibility_evidence_excerpt
 from marketplaces_mcp.core.models import ProductResult
 from marketplaces_mcp.core.normalize import parse_price
+from marketplaces_mcp.core.price_evidence import price_metadata, primary_snapshot, primary_html_text
 
 
-_PROMO_LINK_TEXTS = {"распродажа", "оригинал"}
+_PROMO_LINK_TEXTS = {"распродажа", "оригинал", "скидки недели", "цена что надо", "выгодная цена"}
 
 
 class OzonAdapter(BaseAdapter):
@@ -40,14 +41,17 @@ class OzonAdapter(BaseAdapter):
                 return product, sorted(set(warnings)), url
             warnings.append("OZON_DETAILS_DIRECT_NO_RESULTS")
         elif html:
-            warnings.append("CAPTCHA_OR_BLOCKED")
+            warnings.append("HIVE_WEB_BLOCKED")
 
         recovered, recovery_warnings = await self._details_from_search_result(url, strategy=strategy)
         if recovered is not None:
             return recovered, sorted(set(warnings + recovery_warnings)), url
 
         fallback, fallback_warnings = await self._details_with_camofox(url)
-        return fallback, sorted(set(warnings + recovery_warnings + fallback_warnings)), url
+        combined = warnings + recovery_warnings + fallback_warnings
+        if fallback is not None:
+            combined = [w for w in combined if w != "CAPTCHA_OR_BLOCKED"]
+        return fallback, sorted(set(combined)), url
 
     def parse_search_results(self, html: str, query: str) -> list[ProductResult]:
         if "/product/" in html and re.search(r"^\s*- (?:link|text|banner|complementary)", html, re.MULTILINE):
@@ -93,6 +97,7 @@ class OzonAdapter(BaseAdapter):
                     title=title,
                     url=href,
                     price=price,
+                    **price_metadata(card.get_text(" ", strip=True), price),
                     old_price=_select_price(card, selectors=[".old", ".old-price", ".discount-price"]),
                     currency="RUB",
                     rating=rating,
@@ -129,14 +134,15 @@ class OzonAdapter(BaseAdapter):
             title_match = re.search(r'^\s*- heading "([^"]+)" \[level=1\]', html, re.MULTILINE)
             title = title_match.group(1).strip() if title_match else ""
             if title:
-                primary_offer = html[title_match.end() : title_match.end() + 6000] if title_match else html
+                primary_offer = primary_snapshot(html)
                 return ProductResult(
                     marketplace=self.marketplace,
                     title=title,
                     url=self.normalize_product_url(url),
                     price=_extract_current_price(primary_offer),
+                    **price_metadata(primary_offer, _extract_current_price(primary_offer)),
                     currency="RUB",
-                    availability="available" if re.search(r"\b(?:В корзину|Купить)\b", html, re.I) else None,
+                    availability="available" if re.search(r"\b(?:В корзину|Купить)\b", primary_offer, re.I) else None,
                     confidence=0.9,
                     raw={
                         "source": "camofox_accessibility_snapshot",
@@ -150,7 +156,7 @@ class OzonAdapter(BaseAdapter):
             title = str(meta.get("content") or "").strip() if meta else ""
         if not title:
             return None
-        body = soup.get_text(" ", strip=True)
+        body = primary_html_text(soup)
         price = _extract_current_price(body)
         image = None
         image_meta = soup.select_one("meta[property='og:image']")
@@ -161,6 +167,7 @@ class OzonAdapter(BaseAdapter):
             title=title,
             url=self.normalize_product_url(url),
             price=price,
+            **price_metadata(body, price),
             currency="RUB",
             image_url=image if isinstance(image, str) else None,
             availability="available" if re.search(r"\b(?:В корзину|Купить)\b", body, re.I) else None,
@@ -318,7 +325,7 @@ def _select_price(node, selectors: list[str] | None = None) -> float | None:
                 return parsed
     if explicit_selectors:
         return None
-    return parse_price(node.get_text(" ", strip=True))
+    return _extract_current_price(node.get_text(" ", strip=True))
 
 
 def _first_span_price(node) -> float | None:
@@ -353,7 +360,7 @@ def _parse_accessibility_search(adapter: OzonAdapter, text: str, query: str) -> 
         r'^- link "(?P<title>[^"]+)"(?: \[[^\]]+\])?:\s*\n\s+- /url: (?P<url>/product/[^\s]+)',
         flags=re.MULTILINE,
     )
-    ignored = {"распродажа", "цена что надо", "оригинал", "выгодная цена"}
+    ignored = _PROMO_LINK_TEXTS
     matches = [m for m in link_re.finditer(text) if m.group("title").strip().lower() not in ignored]
     offers: list[ProductResult] = []
     seen: set[str] = set()
@@ -362,12 +369,14 @@ def _parse_accessibility_search(adapter: OzonAdapter, text: str, query: str) -> 
         if not adapter.is_product_url(url) or url in seen:
             continue
         block_end = matches[index + 1].start() if index + 1 < len(matches) else min(len(text), match.end() + 800)
-        prefix = text[max(0, match.start() - 300) : match.start()]
+        previous_end = matches[index - 1].end() if index else 0
+        prefix = text[max(previous_end, match.start() - 300) : match.start()]
         suffix = text[match.end() : block_end]
         price_lines = re.findall(r'^- text: ([^\n]*₽[^\n]*)$', prefix, flags=re.MULTILINE)
         price_values = re.findall(r"([0-9][\d\s]*)\s*₽", price_lines[-1]) if price_lines else []
         price = parse_price(price_values[0]) if price_values else None
-        old_price = parse_price(price_values[1]) if len(price_values) > 1 else None
+        old_match = re.search(r"вместо\s+(\d[\d\s]*)\s*₽", prefix, re.I)
+        old_price = parse_price(old_match.group(1)) if old_match else None
         rating_match = re.search(r'^- text: "?([0-5](?:[.,]\d+)?)"?$', suffix, flags=re.MULTILINE)
         reviews_match = re.search(r"\b([0-9][\d\s]*)\s+отзыв", suffix, flags=re.IGNORECASE)
         stock_match = re.search(r"\b([0-9][\d\s]*)\s+шт\s+осталось", prefix, flags=re.IGNORECASE)
@@ -380,13 +389,15 @@ def _parse_accessibility_search(adapter: OzonAdapter, text: str, query: str) -> 
                 url=url,
                 price=price,
                 old_price=old_price,
+                **price_metadata(prefix, price),
                 currency="RUB",
                 rating=parse_price(rating_match.group(1)) if rating_match else None,
                 reviews_count=parse_int(reviews_match.group(1)) if reviews_match else None,
                 availability=f"{stock_match.group(1).strip()} шт осталось" if stock_match else "available",
                 delivery_hint=delivery_match.group(1).strip() if delivery_match else None,
                 confidence=0.95 if price is not None else 0.75,
-                raw={"source": "camofox_accessibility_snapshot", "search_query": query},
+                raw={"source": "camofox_accessibility_snapshot", "search_query": query,
+                     "price_evidence": " ".join(price_lines[-1:]), "card_text": (prefix + suffix)[:1500]},
             )
         )
     return offers

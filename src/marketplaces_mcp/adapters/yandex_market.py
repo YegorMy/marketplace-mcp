@@ -8,6 +8,7 @@ from bs4 import BeautifulSoup
 from marketplaces_mcp.adapters.base import BaseAdapter, accessibility_evidence_excerpt
 from marketplaces_mcp.core.models import ProductResult
 from marketplaces_mcp.core.normalize import parse_price
+from marketplaces_mcp.core.price_evidence import price_metadata, primary_snapshot, primary_html_text
 
 
 class YandexMarketAdapter(BaseAdapter):
@@ -37,14 +38,17 @@ class YandexMarketAdapter(BaseAdapter):
                 return product, sorted(set(warnings)), url
             warnings.append("YANDEX_DETAILS_DIRECT_NO_RESULTS")
         elif html:
-            warnings.extend(["CAPTCHA_OR_BLOCKED", "HIVE_WEB_BLOCKED"])
+            warnings.append("HIVE_WEB_BLOCKED")
 
         recovered, recovery_warnings = await self._details_from_search_result(url)
         if recovered is not None:
             return recovered, sorted(set(warnings + recovery_warnings)), url
 
         fallback, fallback_warnings = await self._details_with_camofox(url)
-        return fallback, sorted(set(warnings + recovery_warnings + fallback_warnings)), url
+        combined = warnings + recovery_warnings + fallback_warnings
+        if fallback is not None:
+            combined = [w for w in combined if w != "CAPTCHA_OR_BLOCKED"]
+        return fallback, sorted(set(combined)), url
 
     async def search(
         self,
@@ -138,6 +142,7 @@ class YandexMarketAdapter(BaseAdapter):
                     url=url,
                     price=price,
                     old_price=_extract_old_price(card_text),
+                    **price_metadata(card_text, price),
                     currency="RUB",
                     rating=rating,
                     reviews_count=reviews,
@@ -174,18 +179,19 @@ class YandexMarketAdapter(BaseAdapter):
             title_match = re.search(r'^\s*- heading "([^"]+)" \[level=1\]', html, re.MULTILINE)
             title = title_match.group(1).strip() if title_match else ""
             if title:
-                primary_offer = html[title_match.end() : title_match.end() + 6000] if title_match else html
+                primary_offer = primary_snapshot(html)
                 return ProductResult(
                     marketplace=self.marketplace,
                     title=title,
                     url=self.normalize_product_url(url),
                     price=_extract_text_card_price(primary_offer),
+                    **price_metadata(primary_offer, _extract_text_card_price(primary_offer)),
                     old_price=_extract_old_price(primary_offer),
                     currency="RUB",
-                    rating=_extract_text_card_rating(html),
-                    reviews_count=_extract_text_card_reviews_count(html),
-                    availability=_extract_availability(html),
-                    delivery_hint=_extract_text_card_delivery_hint(html),
+                    rating=_extract_text_card_rating(primary_offer),
+                    reviews_count=_extract_text_card_reviews_count(primary_offer),
+                    availability=_extract_availability(primary_offer),
+                    delivery_hint=_extract_text_card_delivery_hint(primary_offer),
                     confidence=0.95,
                     raw={
                         "source": "camofox_accessibility_snapshot",
@@ -199,7 +205,7 @@ class YandexMarketAdapter(BaseAdapter):
             title = str(meta.get("content") or "").strip() if meta else ""
         if not title:
             return None
-        body = soup.get_text(" ", strip=True)
+        body = primary_html_text(soup)
         image = None
         image_meta = soup.select_one("meta[property='og:image']")
         if image_meta:
@@ -210,6 +216,7 @@ class YandexMarketAdapter(BaseAdapter):
             title=title,
             url=self.normalize_product_url(url),
             price=price,
+            **price_metadata(body, price),
             old_price=_extract_old_price(body),
             currency="RUB",
             rating=_extract_text_card_rating(body),
@@ -430,13 +437,15 @@ def _parse_accessibility_search(
                 url=str(group["url"]),
                 price=price,
                 old_price=_extract_old_price(block),
+                **price_metadata(block, price),
                 currency="RUB",
                 rating=_extract_text_card_rating(block),
                 reviews_count=_extract_text_card_reviews_count(block),
                 availability=_extract_availability(block),
                 delivery_hint=_extract_text_card_delivery_hint(block),
                 confidence=0.95 if price is not None else 0.75,
-                raw={"source": "camofox_accessibility_snapshot", "search_query": query},
+                raw={"source": "camofox_accessibility_snapshot", "search_query": query,
+                     "card_text": block[:1500]},
             )
         )
     return offers

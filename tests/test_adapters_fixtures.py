@@ -383,7 +383,8 @@ def test_ozon_details_uses_search_fallback_after_blocked_product_page(monkeypatc
     assert product.url == product_url
     assert product.raw is not None
     assert product.raw["source"] == "ozon_search_result_fallback"
-    assert "CAPTCHA_OR_BLOCKED" in warnings
+    assert "HIVE_WEB_BLOCKED" in warnings
+    assert "CAPTCHA_OR_BLOCKED" not in warnings
     assert "OZON_DETAILS_SEARCH_FALLBACK" in warnings
     assert calls == [product_url, "https://www.ozon.ru/search/?text=7969279"]
 
@@ -522,7 +523,8 @@ def test_yandex_details_uses_http_search_fallback_after_blocked_card(monkeypatch
     assert product.url == product_url
     assert product.raw is not None
     assert product.raw["source"] == "yandex_search_result_fallback"
-    assert "CAPTCHA_OR_BLOCKED" in warnings
+    assert "HIVE_WEB_BLOCKED" in warnings
+    assert "CAPTCHA_OR_BLOCKED" not in warnings
     assert "YANDEX_DETAILS_SEARCH_FALLBACK" in warnings
     assert http_urls == ["https://market.yandex.ru/search?text=5694381852&local-offers-first=0"]
 
@@ -640,7 +642,7 @@ def test_ozon_camofox_snapshot_parsing():
     results = OzonAdapter().parse_search_results(OZON_CAMOFOX_SNAPSHOT, query="наматрасник")
     assert len(results) == 1
     assert results[0].price == 374.0
-    assert results[0].old_price == 999.0
+    assert results[0].old_price is None  # An unlabeled second amount is not proof of an old price.
     assert results[0].rating == 5.0
     assert results[0].reviews_count == 462
     assert results[0].availability == "344 шт осталось"
@@ -813,6 +815,7 @@ def test_avito_search_uses_anonymous_readonly_camofox(tmp_path, monkeypatch):
             avito_region_slug="sankt-peterburg",
             avito_state_path=tmp_path / "avito-state.json",
             avito_min_interval_seconds=0,
+            camofox_url="http://127.0.0.1:9377",
         )
         adapter = AvitoAdapter(settings)
 
@@ -838,6 +841,7 @@ def test_avito_ip_block_starts_shared_cooldown(tmp_path, monkeypatch):
             avito_state_path=tmp_path / "avito-state.json",
             avito_min_interval_seconds=0,
             avito_block_cooldown_seconds=600,
+            camofox_url="http://127.0.0.1:9377",
         )
         first = AvitoAdapter(settings)
         calls = {"count": 0}
@@ -944,7 +948,10 @@ def test_blocked_hive_recovers_with_camofox(monkeypatch):
 
         monkeypatch.setattr(YandexMarketAdapter, "_fetch_with_hive_web", blocked_hive)
         monkeypatch.setattr(YandexMarketAdapter, "_fetch_with_camofox", camofox_snapshot)
-        return await YandexMarketAdapter().search(query="наматрасник", limit=2)
+        return await YandexMarketAdapter(Settings(camofox_url="http://127.0.0.1:9377")).search(
+            query="наматрасник",
+            limit=2,
+        )
 
     results, warnings, _ = asyncio.run(run())
     assert len(results) == 1
@@ -1004,7 +1011,7 @@ def test_product_details_retries_one_empty_camofox_snapshot(monkeypatch):
         monkeypatch.setattr(OzonAdapter, "_fetch_with_hive_web", blocked_hive)
         monkeypatch.setattr(OzonAdapter, "_details_from_search_result", no_search_fallback)
         monkeypatch.setattr(OzonAdapter, "_fetch_with_camofox", next_snapshot)
-        return await OzonAdapter().product_details(
+        return await OzonAdapter(Settings(camofox_url="http://127.0.0.1:9377")).product_details(
             "https://www.ozon.ru/product/namatrasnik-60x120h15sm-belyy-750317510/"
         )
 

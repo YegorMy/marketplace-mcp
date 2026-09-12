@@ -48,6 +48,8 @@ async def fetch_reviews(
         elif adapter._is_blocked(snapshot):
             last_warning = "CAMOFOX_BLOCKED"
         else:
+            if re.search(r'heading "(?:Нет отзывов и оценок|Пока нет отзывов|Нет отзывов)"', snapshot, re.I):
+                return [], ["CAMOFOX_FALLBACK", "REVIEWS_EMPTY"], url, 0, None
             reviews, total, rating, parse_warnings = parse_reviews(
                 adapter.marketplace,
                 snapshot,
@@ -72,6 +74,7 @@ def parse_reviews(
     snapshot: str,
     limit: int,
 ) -> tuple[list[ReviewResult], int | None, float | None, list[str]]:
+    snapshot = "\n".join(line.lstrip() for line in snapshot.splitlines())
     if marketplace == "ozon":
         return _parse_ozon(snapshot, limit)
     if marketplace == "yandex_market":
@@ -140,8 +143,10 @@ def _parse_yandex(
     )
     rating = parse_price(summary_match.group(1)) if summary_match else None
     total = _as_int(summary_match.group(2)) if summary_match else None
+    visible_date = rf"\d{{1,2}}\s+(?:{_MONTHS})(?:\s+20\d{{2}})?"
     header_re = re.compile(
-        rf"^- button \"(?P<author>[^\"]+)\"[^\n]*\n- text: (?P<date>{_DATE_RE})$",
+        rf'^- button "(?P<author>[^"\n]+)"[^\n]*'
+        rf'(?:\n- text: "?(?P=author)"?)?\n- text: "?(?P<date>{visible_date})',
         flags=re.MULTILINE | re.IGNORECASE,
     )
     headers = list(header_re.finditer(text))
@@ -150,9 +155,7 @@ def _parse_yandex(
         end = headers[index + 1].start() if index + 1 < len(headers) else len(text)
         block = text[header.end() : end]
         body_match = re.search(
-            r"^- ['\"]?button \"(?P<body>(?:Достоинства:|Недостатки:|Комментарий:).+?)\"['\"]?:?",
-            block,
-            flags=re.MULTILINE,
+            r'(?P<body>(?:Достоинства:|Недостатки:|Комментарий:)[^"\n]+)', block,
         )
         if not body_match:
             continue
@@ -175,6 +178,8 @@ def _parse_yandex(
         if len(reviews) >= limit:
             break
     warnings = ["REVIEW_SORT_PLATFORM_DEFAULT"]
+    if any(review.published_at and not re.search(r"20\d{2}", review.published_at) for review in reviews):
+        warnings.append("REVIEW_YEAR_UNVERIFIED")
     if re.search(r'button "Этот вариант"', text) and not re.search(
         r'button "Этот вариант"[^\n]*\[pressed\]', text
     ):
