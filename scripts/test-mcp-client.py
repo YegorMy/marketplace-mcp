@@ -109,6 +109,16 @@ async def main() -> None:
                 assert not access_result.isError
                 assert json.loads(access_result.content[0].text)["search_supported"] is True
                 assert not any(result.isError for result in (result, flight_result, hotel_result))
+                for tool_name, arguments in (
+                    ("ozon_travel_tours_search", {"departure_date": "not-a-date"}),
+                    ("ozon_travel_tour_details", {"search_url": "invalid", "hotel_name": "Fixture"}),
+                ):
+                    rejected = await session.call_tool(tool_name, arguments)
+                    assert not rejected.isError
+                    payload = json.loads(rejected.content[0].text)
+                    assert payload["offers"] == []
+                    assert payload["warnings"] == ["INVALID_TOUR_REQUEST"]
+                    assert payload["source_url"] == "https://www.ozon.ru/travel/tours/"
                 print(
                     json.dumps(
                         {

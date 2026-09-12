@@ -127,6 +127,20 @@ _MULTI_PRICE = re.compile(
 )
 
 
+def is_game_listing(title: str, description: str | None = None) -> bool:
+    """Keep networking hardware and consoles out of automatic game matching."""
+    text = _clean(f"{title} {description or ''}")
+    if not (_SWITCH_1.search(text) or _SWITCH_2.search(text)):
+        return False
+    if re.search(r"\b(?:network|router|коммутатор|маршрутизатор|console|консоль|приставка)\b", title, re.I):
+        return False
+    return bool(
+        re.search(r"\b(?:nintendo|cartridge)\b", text, re.I)
+        or any(pattern.search(text) for pattern in
+               (_GAME_WORD, _PHYSICAL, _GAME_KEY, _DIGITAL, _ACCOUNT, _EMPTY_CASE))
+    )
+
+
 def classify_game_offer(
     title: str,
     description: str | None,

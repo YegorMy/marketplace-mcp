@@ -39,6 +39,12 @@ the displayed total price. Hotel results deliberately keep `nightly_price` and
 as the exact total for the requested stay; use hotel details/rates when an exact
 dated total is required.
 
+Flight prices stay unknown when the page lacks the requested journey legs.
+Arrival dates use displayed day offsets; ambiguous overnight dates stay unknown.
+Hotel prices are withheld when the displayed year conflicts with the request or
+individual tariff prices cannot be separated. Meals, cancellation and payment
+terms belong to each tariff, including different tariffs with the same price.
+
 ## Package tours and access diagnostics
 
 - `ozon_travel_tours_search` discovers Ozon package-tour hotel candidates.
@@ -47,6 +53,11 @@ dated total is required.
 - `package_tours_search` is a separate 1001tur source, never an Ozon quote.
 - `avito_access_status` reports shared Avito access/cooldown state.
 - `avito_game_search` distinguishes physical cartridges, Game-Key Cards and excluded digital/account listings.
+
+Ozon package search and details share the same access cooldown. Browser failures,
+busy requests and visible challenges return structured diagnostics with a source
+URL. Completing verification manually in the retained tab can be checked with
+`ozon_tours_access_status(inspect_tab=true)` before continuing.
 
 The verified Ozon package scope is Saint Petersburg (`LED`) to UAE, one room,
 exact departure date, 1–6 adults and up to three children aged 0–16. Age 0 means

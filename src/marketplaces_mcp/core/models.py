@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -39,11 +39,13 @@ class ProductResult(BaseModel):
     def classify_game_media(self):
         import re
         if self.game_offer is None and re.search(r"switch|свитч|свич|\bns2\b", self.title, re.I):
-            from marketplaces_mcp.core.game_offers import classify_game_offer
+            from marketplaces_mcp.core.game_offers import classify_game_offer, is_game_listing
             raw = self.raw or {}
-            self.game_offer = classify_game_offer(
-                self.title, raw.get("description") or raw.get("card_text"), self.price,
-            ).model_dump()
+            description = raw.get("description") or raw.get("card_text")
+            if is_game_listing(self.title, description):
+                self.game_offer = classify_game_offer(
+                    self.title, description, self.price,
+                ).model_dump()
         if self.game_offer and self.price_kind != "exact":
             self.game_offer["price_kind"] = "from_price" if self.price_kind == "from" else "unknown"
             if self.price_condition:
@@ -249,3 +251,48 @@ class TourSearchResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     source_url: str
     artifact_id: str | None = None
+
+
+class OzonTourLead(BaseModel):
+    hotel_name: str
+    source_url: str
+    total_price: None = None
+    meal_plan: None = None
+    evidence: str
+    warning: str
+
+
+class OzonTourRate(BaseModel):
+    provider: Literal["ozon_travel"] = "ozon_travel"
+    hotel_name: str
+    room_name: str
+    meal_plan: str
+    operator: str | None = None
+    departure_date: date
+    stay_end_date: date
+    return_date: None = None
+    nights: int = Field(ge=1)
+    adults: int = Field(ge=1)
+    child_ages: list[int] = Field(default_factory=list)
+    rooms: Literal[1] = 1
+    total_price: float = Field(gt=0)
+    currency: Literal["RUB"] = "RUB"
+    price_per_night: float = Field(gt=0)
+    flight_included: Literal[True] = True
+    flight_selection_pending: Literal[True] = True
+    baggage: None = None
+    transfer: None = None
+    availability: Literal["quoted_not_booked"] = "quoted_not_booked"
+    source_url: str
+    evidence: str
+
+
+class OzonTourResponse(BaseModel):
+    provider: Literal["ozon_travel"] = "ozon_travel"
+    source_url: str
+    checked_at: float = Field(default_factory=lambda: datetime.now(timezone.utc).timestamp())
+    offers: list[OzonTourLead | OzonTourRate] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    access: dict[str, Any] | None = None
+    browser_tab_id: str | None = None
+    note: str | None = None

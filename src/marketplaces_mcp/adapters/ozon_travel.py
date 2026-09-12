@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
@@ -66,7 +66,7 @@ _HOTEL_URL_RE = re.compile(
     flags=re.IGNORECASE,
 )
 _MONEY_RE = re.compile(r"(?:от\s*)?(\d[\d\s\u00a0\u202f.,]*?)\s*₽", flags=re.IGNORECASE)
-_TIME_PAIR_RE = re.compile(r"\b([0-2]\d:[0-5]\d)\s*[—–-]\s*([0-2]\d:[0-5]\d)\b")
+_TIME_PAIR_RE = re.compile(r"\b((?:[01]\d|2[0-3]):[0-5]\d)\s*[—–-]\s*((?:[01]\d|2[0-3]):[0-5]\d)\b")
 
 
 class OzonTravelAdapter(BaseAdapter):
@@ -150,6 +150,10 @@ class OzonTravelAdapter(BaseAdapter):
                 departure_date=parsed_departure,
                 return_date=parsed_return,
             )
+            if any(not (offer.raw or {}).get("itinerary_verified") for offer in offers):
+                warnings.extend(["FLIGHT_ITINERARY_UNVERIFIED", "PRICE_UNVERIFIED"])
+            if any(segment.arrival_at is None for offer in offers for segment in offer.segments):
+                warnings.append("ARRIVAL_DATE_UNVERIFIED")
             if direct_only:
                 offers = [offer for offer in offers if offer.stops == 0]
             offers = _sort_flights(offers, sort)
@@ -341,6 +345,8 @@ class OzonTravelAdapter(BaseAdapter):
             warnings.append("SINGLE_UNIT_RATE_QUOTE")
         if result is None:
             warnings.append("NO_RESULTS")
+        elif context_verified and not result.rates and _MONEY_RE.search(_primary_hotel_text(_visible_text(html))):
+            warnings.extend(["ROOM_RATES_UNVERIFIED", "PRICE_UNVERIFIED"])
         return result, sorted(set(warnings))
 
     def build_flight_url(
@@ -417,7 +423,7 @@ class OzonTravelAdapter(BaseAdapter):
     ) -> list[FlightOffer]:
         text = _visible_text(html)
         offers: list[FlightOffer] = []
-        seen: set[tuple[str, float | None, str | None]] = set()
+        seen: set[tuple] = set()
         for block in _flight_offer_blocks(html, text):
             time_pairs = list(_TIME_PAIR_RE.finditer(block))
             money = list(_MONEY_RE.finditer(block))
@@ -430,6 +436,9 @@ class OzonTravelAdapter(BaseAdapter):
             journey_dates = [departure_date]
             if return_date is not None:
                 journey_dates.append(return_date)
+            itinerary_verified = len(time_pairs) == len(journey_dates)
+            if not itinerary_verified:
+                price = None
             journey_routes = [(origin, destination), (destination, origin)]
             journey_lines = _flight_journey_lines(block)
             segments: list[FlightSegment] = []
@@ -448,7 +457,7 @@ class OzonTravelAdapter(BaseAdapter):
                         departure_at=(
                             f"{segment_date.isoformat()}T{times.group(1)}:00"
                         ),
-                        arrival_at=f"{segment_date.isoformat()}T{times.group(2)}:00",
+                        arrival_at=_flight_arrival_at(segment_date, times, block),
                         airline=_parse_airline(journey_text),
                         duration_minutes=_parse_duration_minutes(journey_text),
                         baggage=_extract_baggage(block),
@@ -459,14 +468,14 @@ class OzonTravelAdapter(BaseAdapter):
                     segment.airline for segment in segments if segment.airline
                 )
             )
-            departure_at = segments[0].departure_at
-            key = (departure_at, price, "|".join(airlines) or None)
-            if key in seen:
-                continue
-            seen.add(key)
             baggage = _extract_baggage(block)
             refundable = _bool_from_terms(block, "refund")
             exchangeable = _bool_from_terms(block, "exchange")
+            key = (tuple(segment.model_dump_json() for segment in segments),
+                   price, baggage, refundable, exchangeable)
+            if key in seen:
+                continue
+            seen.add(key)
             segment_durations = [
                 segment.duration_minutes
                 for segment in segments
@@ -496,9 +505,9 @@ class OzonTravelAdapter(BaseAdapter):
                     baggage=baggage,
                     refundable=refundable,
                     exchangeable=exchangeable,
-                    availability="available",
-                    confidence=0.82,
-                    raw={"evidence": block[:2500]},
+                    availability="available" if itinerary_verified else None,
+                    confidence=0.82 if itinerary_verified else 0.3,
+                    raw={"evidence": block[:2500], "itinerary_verified": itinerary_verified},
                 )
             )
         return offers
@@ -1001,6 +1010,20 @@ def _parse_airline(block: str) -> str | None:
     return known.group(1) if known else None
 
 
+def _flight_arrival_at(departure_date: date, times: re.Match[str], block: str) -> str | None:
+    # The displayed day offset is authoritative; clock times alone cannot
+    # establish an overnight arrival across different time zones.
+    tail = block[times.end():].split("\n", 1)[0]
+    offset = re.match(r"\s*\(?\s*([+-]\d{1,2})(?!\d)", tail)
+    if offset is None and times.group(2) < times.group(1):
+        return None
+    try:
+        arrival_date = departure_date + timedelta(days=int(offset[1]) if offset else 0)
+    except OverflowError:
+        return None
+    return f"{arrival_date.isoformat()}T{times.group(2)}:00"
+
+
 def _flight_journey_lines(block: str) -> list[str]:
     """Return one compact source line for each outbound/return journey."""
     return [
@@ -1100,8 +1123,52 @@ def _hotel_candidates_from_snapshot(
     return candidates
 
 
+def _hotel_rate_text(source: str) -> str:
+    """Preserve room headings and tariff controls in either supported input format."""
+    if re.search(r"^\s*- ", source, re.MULTILINE):
+        return source
+    soup = BeautifulSoup(source, "html.parser")
+    for node in soup.select("script,style,noscript"):
+        node.decompose()
+    for node in soup.select("h1,h2,h3,h4,h5,h6,[role=heading],img,button,[role=button]"):
+        if node.parent is None:
+            continue
+        label = str(node.get("alt") or "") if node.name == "img" else node.get_text(" ", strip=True)
+        label = label.replace('"', "'")
+        if node.name == "img":
+            rendered = f'- img "{label}"'
+        elif node.name == "button" or node.get("role") == "button":
+            rendered = f'- button "{label}"'
+        else:
+            level = node.get("aria-level") or (node.name[1:] if node.name.startswith("h") else "2")
+            rendered = f'- heading "{label}" [level={level}]'
+        node.replace_with("\n" + rendered + "\n")
+    return soup.get_text("\n", strip=True)
+
+
+def _hotel_tariff_blocks(lines: list[str]):
+    room_name = None
+    pending: list[str] = []
+    for line in lines:
+        candidate = _room_name_candidate(line)
+        other_rate = re.search(r"Другой тариф", line, re.I)
+        if candidate or other_rate:
+            if room_name and pending:
+                yield room_name, pending
+            pending = []
+            if candidate:
+                room_name = candidate
+        if room_name:
+            pending.append(line)
+            if re.match(r'^- (?:button|link) "Выбрать(?: номер| тариф)?"', line, re.I):
+                yield room_name, pending
+                pending = []
+    if room_name and pending:
+        yield room_name, pending
+
+
 def _parse_hotel_rates(source: str, nights: int) -> list[HotelRate]:
-    text = source if re.search(r"^\s*- ", source, re.MULTILINE) else _visible_text(source)
+    text = _hotel_rate_text(source)
     current_hotel_text = re.split(
         r"Похожие\s+(?:отели|гостиницы|варианты)",
         text,
@@ -1119,34 +1186,23 @@ def _parse_hotel_rates(source: str, nights: int) -> list[HotelRate]:
         )
     ]
     rates: list[HotelRate] = []
-    seen: set[tuple[str | None, float | None]] = set()
-    current_room_name: str | None = None
-    current_room_start = 0
-    for index, line in enumerate(lines):
-        candidate = _room_name_candidate(line)
-        if candidate:
-            current_room_name = candidate
-            current_room_start = index
-        money = _MONEY_RE.search(line)
-        if not money or re.match(r"^\s*\+", line):
+    seen: set[tuple] = set()
+    for current_room_name, context_lines in _hotel_tariff_blocks(lines):
+        prices = [
+            parse_price(money.group(1))
+            for line in context_lines
+            if not re.match(r"^(?:-\s*text:\s*)?\+", line)
+            for money in _MONEY_RE.finditer(line)
+        ]
+        prices = [price for price in prices if price is not None]
+        # Without a tariff boundary even equal amounts may be different rates.
+        # Do not combine their prices and terms or guess a discount/old-price pair.
+        if len(prices) != 1:
             continue
-        price = parse_price(money.group(1))
-        # A currency amount outside a named room/rate block is usually a date
-        # carousel, loyalty bonus, or another hotel's teaser. It is not safe to
-        # present it as the requested stay's bookable rate.
-        if current_room_name is None:
+        price = prices[0]
+        if price <= 0:
             continue
-        end = min(len(lines), index + 5)
-        for next_index in range(index + 1, end):
-            if _MONEY_RE.search(lines[next_index]):
-                end = next_index
-                break
-        context_lines = lines[current_room_start:end]
         context = " ".join(context_lines)
-        key = (current_room_name, price)
-        if key in seen:
-            continue
-        seen.add(key)
         meal = _first_match(
             context,
             r"(без питания|завтрак(?: включён)?|полупансион|полный пансион)",
@@ -1163,6 +1219,10 @@ def _parse_hotel_rates(source: str, nights: int) -> list[HotelRate]:
             context,
             r"(остал(?:ся|ось|ись)\s+\d+\s+вариант(?:а|ов)?|нет мест)",
         )
+        key = (current_room_name, price, meal, cancellation, payment, availability)
+        if key in seen:
+            continue
+        seen.add(key)
         rates.append(
             HotelRate(
                 room_name=current_room_name,
@@ -1185,6 +1245,8 @@ def _parse_hotel_rates(source: str, nights: int) -> list[HotelRate]:
 
 
 def _room_name_candidate(value: str) -> str | None:
+    if re.search(r"\[level=1\]\s*$", value):
+        return None
     candidate = value.strip().strip('"')
     labelled = re.search(r'(?:heading|img)\s+"([^"\n]+)', candidate, re.IGNORECASE)
     structurally_named = labelled is not None or bool(
@@ -1452,24 +1514,26 @@ def _hotel_context_window(text: str, check_in: date, check_out: date) -> str | N
 def _hotel_dates_match(text: str, check_in: date, check_out: date) -> bool:
     if check_in.isoformat() in text and check_out.isoformat() in text:
         return True
-    numeric_in = rf"(?<!\d)0?{check_in.day}[./-]0?{check_in.month}(?:[./-]{check_in.year})?(?!\d)"
-    numeric_out = rf"(?<!\d)0?{check_out.day}[./-]0?{check_out.month}(?:[./-]{check_out.year})?(?!\d)"
+    numeric_in = rf"(?<![\d./-])0?{check_in.day}[./-]0?{check_in.month}(?:[./-]{check_in.year})?(?![\d./-])"
+    numeric_out = rf"(?<![\d./-])0?{check_out.day}[./-]0?{check_out.month}(?:[./-]{check_out.year})?(?![\d./-])"
     if re.search(numeric_in, text) and re.search(numeric_out, text):
         return True
     if check_in.month == check_out.month:
         month = _RU_MONTHS[check_in.month]
         same_month_range = re.compile(
-            rf"(?<!\d){check_in.day}\s*[—–-]\s*{check_out.day}\s+{month}(?=\s|[,—–-]|$)",
+            rf"(?<!\d){check_in.day}\s*[—–-]\s*{check_out.day}\s+{month}(?=\s|[,—–-]|$)"
+            rf"(?:,?\s+(?P<year>\d{{4}}))?",
             re.IGNORECASE,
         )
-        if same_month_range.search(text):
-            return True
-    first = rf"(?<!\d){check_in.day}\s+{_RU_MONTHS[check_in.month]}(?=\s|[,—–-]|$)"
-    second = rf"(?<!\d){check_out.day}\s+{_RU_MONTHS[check_out.month]}(?=\s|[,—–-]|$)"
-    return bool(
-        re.search(first, text, re.IGNORECASE)
-        and re.search(second, text, re.IGNORECASE)
-    )
+        for match in same_month_range.finditer(text):
+            if match["year"] is None or int(match["year"]) == check_in.year == check_out.year:
+                return True
+    def matches_date(value: date) -> bool:
+        pattern = (rf"(?<!\d){value.day}\s+{_RU_MONTHS[value.month]}(?=\s|[,—–-]|$)"
+                   rf"(?:,?\s+(?P<year>\d{{4}}))?")
+        return any(match["year"] is None or int(match["year"]) == value.year
+                   for match in re.finditer(pattern, text, re.I))
+    return matches_date(check_in) and matches_date(check_out)
 
 
 def _is_ozon_hotel_url(value: str) -> bool:

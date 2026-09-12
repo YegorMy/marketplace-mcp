@@ -185,15 +185,25 @@ class OzonToursAdapter:
                                "checked_at": time.time(), "retry_after": time.time()+1800})
             raise ValueError(status)
 
+    def _access_response(self, source_url, state):
+        warnings = [state["status"]]
+        if state["status"] in {"OZON_TOURS_BLOCKED", "OZON_TOURS_CAPTCHA_REQUIRED"}:
+            warnings.append("CAPTCHA_OR_BLOCKED")
+        return {"provider": "ozon_travel", "source_url": source_url, "offers": [],
+                "access": state, "warnings": warnings}
+
     async def search(self, *, limit=10, **kwargs):
         url = build_search_url(**kwargs)
         with self._lock():
             prior = self.access.read()
-            if prior["status"] in {"OZON_TOURS_BLOCKED", "OZON_TOURS_CAPTCHA_REQUIRED", "OZON_TOURS_STATE_ERROR"} and not prior["retry_allowed"]:
-                return {"provider": "ozon_travel", "offers": [], "access": prior}
+            if self.access.navigation_blocked(prior):
+                return self._access_response(url, prior)
             state = await self.browser.inspect(allow_navigation=True)
             if state["status"] not in {"OZON_TOURS_PAGE_AVAILABLE", "OZON_TOURS_CONTENT_UNVERIFIED"}:
-                return {"provider": "ozon_travel", "offers": [], "access": state}
+                if state["status"] in {"OZON_TOURS_BLOCKED", "OZON_TOURS_CAPTCHA_REQUIRED"}:
+                    self.access.write({**state, "checked_at": time.time(), "retry_after": time.time()+1800})
+                    state = self.access.read()
+                return self._access_response(url, state)
             tab_id = state["browser_tab_id"]
             async with httpx.AsyncClient(base_url=self.browser.base_url, timeout=35) as c:
                 current = await self._capture(c, tab_id)
@@ -224,6 +234,9 @@ class OzonToursAdapter:
     async def details(self, *, search_url, hotel_name, all_inclusive_only=True, limit=20):
         expected = search_context(search_url)
         with self._lock():
+            prior = self.access.read()
+            if self.access.navigation_blocked(prior):
+                return self._access_response(search_url, prior)
             async with httpx.AsyncClient(base_url=self.browser.base_url, timeout=35) as c:
                 tabs = (await self._request(c, "/tabs"))["tabs"]
                 matching = []
@@ -236,6 +249,7 @@ class OzonToursAdapter:
                 if len(matching) != 1:
                     raise ValueError("Search tab is missing or ambiguous; call ozon_travel_tours_search")
                 tab_id = matching[0]["tabId"]
+                await self._guard(c, tab_id)
                 data = await self._capture(c, tab_id)
                 leads = parse_leads(data, search_url, 100)
                 if sum(x["hotel_name"] == hotel_name for x in leads) != 1:
@@ -261,6 +275,7 @@ class OzonToursAdapter:
                 if not detail_id:
                     raise ValueError("Ozon did not open a room-selection page")
                 offers = parse_rates(data, search_url, hotel_name, all_inclusive_only, max(1, min(limit, 30)))
-                return {"provider": "ozon_travel", "checked_at": time.time(), "offers": offers,
+                return {"provider": "ozon_travel", "source_url": search_url,
+                        "checked_at": time.time(), "offers": offers,
                         "browser_tab_id": detail_id, "warnings": ["FINAL_FLIGHT_SELECTION_PENDING", "SINGLE_ROOM_QUOTE"],
                         "note": "Read-only room/operator quotes; flight choice, baggage, transfer and final booking total need confirmation."}

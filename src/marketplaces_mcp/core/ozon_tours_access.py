@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -42,7 +43,9 @@ class OzonToursAccess:
     def read(self):
         try:
             data = json.loads(self.path.read_text())
-            if not isinstance(data, dict) or not isinstance(data.get("retry_after"), (float, int)):
+            if (not isinstance(data, dict) or not isinstance(data.get("status"), str)
+                    or type(data.get("retry_after")) not in (float, int)
+                    or not math.isfinite(data["retry_after"]) or data["retry_after"] < 0):
                 raise ValueError("Invalid state")
         except FileNotFoundError:
             data = {"status": "OZON_TOURS_NOT_CHECKED", "retry_after": 0}
@@ -59,6 +62,13 @@ class OzonToursAccess:
             out.flush()
             os.fsync(out.fileno())
         os.replace(name, self.path)
+
+    def navigation_blocked(self, state=None) -> bool:
+        state = self.read() if state is None else state
+        return (state["status"] == "OZON_TOURS_STATE_ERROR"
+                or (state["status"] in {"OZON_TOURS_BLOCKED", "OZON_TOURS_CAPTCHA_REQUIRED",
+                                        "OZON_TOURS_PROBE_INTERRUPTED_OR_RUNNING"}
+                    and not state["retry_allowed"]))
 
     async def status(self, probe: bool = False, inspect_tab: bool = False):
         prior = self.read()

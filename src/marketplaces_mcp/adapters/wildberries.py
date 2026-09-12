@@ -239,6 +239,8 @@ def _api_product_to_result(
     if not product_id or not title:
         return None
     price, old_price = _api_prices(item)
+    variant_prices = {current for current, _ in _api_variant_prices(item)}
+    price_kind = "unknown" if price is None else "from" if len(variant_prices) > 1 else "exact"
     total_quantity = _as_int(item.get("totalQuantity"))
     raw: dict[str, Any] = {"source": source, "product_id": product_id}
     if query is not None:
@@ -248,6 +250,8 @@ def _api_product_to_result(
         title=title,
         url=f"https://www.wildberries.ru/catalog/{product_id}/detail.aspx",
         price=price,
+        price_kind=price_kind,
+        price_condition="Starting price; variant prices differ" if price_kind == "from" else None,
         old_price=old_price,
         currency="RUB",
         rating=_as_float(item.get("reviewRating") or item.get("rating")),
@@ -260,7 +264,8 @@ def _api_product_to_result(
     )
 
 
-def _api_prices(item: dict[str, Any]) -> tuple[float | None, float | None]:
+def _api_variant_prices(item: dict[str, Any]) -> list[tuple[float, float | None]]:
+    prices = []
     for size in item.get("sizes") or []:
         if not isinstance(size, dict):
             continue
@@ -269,8 +274,15 @@ def _api_prices(item: dict[str, Any]) -> tuple[float | None, float | None]:
             continue
         current = _kopecks_to_rub(price.get("product") or price.get("sale") or price.get("total"))
         old = _kopecks_to_rub(price.get("basic"))
-        if current is not None:
-            return current, old if old and old > current else None
+        if current is not None and current > 0:
+            prices.append((current, old if old and old > current else None))
+    return prices
+
+
+def _api_prices(item: dict[str, Any]) -> tuple[float | None, float | None]:
+    variants = _api_variant_prices(item)
+    if variants:
+        return min(variants, key=lambda pair: pair[0])
     current = _kopecks_to_rub(item.get("salePriceU") or item.get("salePrice"))
     old = _kopecks_to_rub(item.get("priceU") or item.get("price"))
     return current, old if old and current and old > current else None

@@ -16,7 +16,7 @@ from marketplaces_mcp.adapters import (
 )
 from marketplaces_mcp.core.ozon_tours_access import OzonToursAccess
 from marketplaces_mcp.core.ozon_tours_browser import OzonToursBrowser
-from marketplaces_mcp.adapters.ozon_tours import OzonToursAdapter
+from marketplaces_mcp.adapters.ozon_tours import OzonToursAdapter, build_search_url, search_context
 from marketplaces_mcp.core.artifacts import create_artifact, read_artifact
 from marketplaces_mcp.core.config import get_settings
 from marketplaces_mcp.core.matching import group_product_results
@@ -25,6 +25,7 @@ from marketplaces_mcp.core.models import (
     FlightSearchResponse,
     HotelSearchResponse,
     OfferGroup,
+    OzonTourResponse,
     ProductResult,
     ReviewsResponse,
     SearchResponse,
@@ -93,7 +94,7 @@ async def ozon_travel_tours_search(
     min_nights: int = 5, max_nights: int = 9, adults: int = 2,
     child_ages: list[int] | None = None, rooms: int = 1,
     all_inclusive_only: bool = True, limit: int = 10,
-):
+) -> OzonTourResponse:
     """Search actual Ozon package tours in the retained desktop Camofox browser.
 
     Currently verified LED to UAE, one room. Include infant age 0 in child_ages.
@@ -101,16 +102,23 @@ async def ozon_travel_tours_search(
     Returns hotel leads, never treats search-card prices as matching meal prices.
     Call ozon_travel_tour_details for serious candidates. No booking or payment.
     """
-    return await asyncio.wait_for(_ozon_package_adapter.search(
+    kwargs = dict(
         origin=origin, destination=destination, departure_date=departure_date,
         min_nights=min_nights, max_nights=max_nights, adults=adults,
-        child_ages=child_ages, rooms=rooms, all_inclusive_only=all_inclusive_only, limit=limit,
-    ), timeout=150)
+        child_ages=child_ages, rooms=rooms, all_inclusive_only=all_inclusive_only,
+    )
+    try:
+        source_url = build_search_url(**kwargs)
+    except ValueError:
+        return OzonTourResponse(source_url="https://www.ozon.ru/travel/tours/",
+                                warnings=["INVALID_TOUR_REQUEST"])
+    return await _call_tour_tool(_ozon_package_adapter.search(**kwargs, limit=limit),
+                                source_url=source_url, timeout=150)
 
 
 @mcp.tool()
 async def ozon_travel_tour_details(search_url: str, hotel_name: str,
-                                   all_inclusive_only: bool = True, limit: int = 20):
+                                   all_inclusive_only: bool = True, limit: int = 20) -> OzonTourResponse:
     """Read exact Ozon room/meal/operator package quotes for a current search lead.
 
     Pass source_url and exact hotel_name from ozon_travel_tours_search. Opens only
@@ -118,10 +126,34 @@ async def ozon_travel_tour_details(search_url: str, hotel_name: str,
     Room-page meal filters are checked independently: Ozon search-card prices
     can reflect breakfast even when all-inclusive was selected.
     """
-    return await asyncio.wait_for(_ozon_package_adapter.details(
+    try:
+        search_context(search_url)
+    except ValueError:
+        return OzonTourResponse(source_url="https://www.ozon.ru/travel/tours/",
+                                warnings=["INVALID_TOUR_REQUEST"])
+    return await _call_tour_tool(_ozon_package_adapter.details(
         search_url=search_url, hotel_name=hotel_name,
         all_inclusive_only=all_inclusive_only, limit=limit,
-    ), timeout=110)
+    ), source_url=search_url, timeout=110)
+
+
+async def _call_tour_tool(operation, *, source_url: str, timeout: float) -> OzonTourResponse:
+    try:
+        payload = await asyncio.wait_for(operation, timeout=timeout)
+        return OzonTourResponse.model_validate(payload)
+    except Exception as exc:
+        # CancelledError is intentionally not caught: cancellation must release
+        # the adapter's lock and stop the browser workflow.
+        if isinstance(exc, BlockingIOError):
+            warnings = ["OZON_TOURS_REQUEST_IN_PROGRESS"]
+        elif str(exc) in {"OZON_TOURS_CAPTCHA_REQUIRED", "OZON_TOURS_BLOCKED"}:
+            warnings = [str(exc), "CAPTCHA_OR_BLOCKED"]
+        elif isinstance(exc, ValueError):
+            warnings = ["OZON_TOURS_CONTEXT_UNVERIFIED"]
+        else:
+            warnings = [f"OZON_TOURS_FAILED_{type(exc).__name__}"]
+        return OzonTourResponse(source_url=source_url, warnings=warnings,
+                                access=_tours_access.read())
 
 
 async def _safe_search(adapter, **kwargs):
