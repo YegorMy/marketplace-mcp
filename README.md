@@ -41,6 +41,10 @@ dated total is required.
 
 Flight prices stay unknown when the page lacks the requested journey legs.
 Arrival dates use displayed day offsets; ambiguous overnight dates stay unknown.
+Indexed flight links must match the requested airport/city codes exactly: a
+Pulkovo or all-Moscow route cannot satisfy an SVO request. Index links carry no
+verified fare or dated availability. A visible Ozon Travel block stops browser
+fallback; public-index discovery can still return a matching route link.
 Hotel prices are withheld when the displayed year conflicts with the request or
 individual tariff prices cannot be separated. Meals, cancellation and payment
 terms belong to each tariff, including different tariffs with the same price.
@@ -59,10 +63,27 @@ busy requests and visible challenges return structured diagnostics with a source
 URL. Completing verification manually in the retained tab can be checked with
 `ozon_tours_access_status(inspect_tab=true)` before continuing.
 
-The verified Ozon package scope is Saint Petersburg (`LED`) to UAE, one room,
-exact departure date, 1–6 adults and up to three children aged 0–16. Age 0 means
-an infant under one year. Request 2–21 nights with at most five stay lengths
-per call, for example 5–9 and 10–12.
+Ozon package searches can use any departure city and destination country encoded
+in a supported Ozon search link. Choose a route in Ozon's public tours form, copy
+the resulting search URL and pass it as `search_url` to
+`ozon_travel_tours_search`. In this mode, the link supplies the complete trip;
+only `limit` may accompany it. The returned `source_url` can be passed to
+`ozon_travel_tour_details` with the chosen hotel name.
+
+Automatic name lookup currently knows only Saint Petersburg (`LED`) to UAE.
+Other names return `OZON_TOURS_ROUTE_LOOKUP_REQUIRED` with a link to Ozon's form;
+the server never substitutes that route or guesses provider IDs. Broader automatic
+location lookup has not been implemented or verified. General route parsing and
+context checks are covered offline; live Ozon access remains environment-dependent.
+
+Both input modes quote one room, one exact departure date, 1–6 adults and up to
+three children aged 0–16. Age 0 means an infant under one year. Request 2–21 nights
+with at most five stay lengths per call, for example 5–9 and 10–12. Copied links
+with incomplete, conflicting or unsupported trip filters are rejected rather
+than silently broadened. Supported meal filters are the existing all-inclusive
+options; omit the meal filter in Ozon's form to search all meal plans. Additional
+resort/hotel filters require separate support. Known campaign tracking parameters
+are discarded.
 
 Search-card prices can belong to breakfast even when all-inclusive filters are
 selected. Package search therefore returns `total_price=null`; use details to
