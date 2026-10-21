@@ -177,19 +177,37 @@ Live-поиск зависит от текущего поведения площ
 
 ## Подключение к Hermes
 
-Скрипт прописывает MCP-сервер `marketplaces` в `~/.hermes/config.yaml` и сразу проверяет подключение:
+Сначала установите `uv` и Hermes CLI. Установщик добавляет или обновляет только выбранную запись MCP-сервера, затем запускает `hermes mcp test`.
+
+macOS / Linux:
 
 ```bash
 bash scripts/install-hermes-mcp.sh
 ```
 
-Имя MCP-сервера можно переопределить:
+Windows PowerShell 5.1 или PowerShell 7 — WSL и Git Bash не требуются:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-hermes-mcp.ps1
+```
+
+Для PowerShell 7 замените `powershell.exe` на `pwsh`. Параметры относятся только к этому процессу; установщик не меняет системную политику выполнения скриптов.
+
+Можно переопределить имя сервера, папку проекта и путь к uv:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-hermes-mcp.ps1 -ServerName marketplaces -ProjectDir 'C:\src\marketplace-mcp' -UvBin 'C:\Tools\uv.exe'
+```
 
 ```bash
 SERVER_NAME=marketplaces bash scripts/install-hermes-mcp.sh
 ```
 
-Ручная конфигурация Hermes:
+Если задана переменная `HERMES_HOME`, используется конфигурация `$HERMES_HOME/config.yaml`. По умолчанию это `~/.hermes/config.yaml` на macOS/Linux и `%LOCALAPPDATA%\hermes\config.yaml` на нативной Windows — согласно [документации Hermes для Windows](https://hermes-agent.nousresearch.com/docs/user-guide/windows-native). Если файла ещё нет, сначала выполните настройку Hermes. Для отдельного профиля задайте `HERMES_HOME` с путём к папке этого профиля перед запуском установщика.
+
+Перед изменением файла установщик сохраняет копию `config.yaml.bak`. Остальные настройки и MCP-серверы сохраняются. Комментарии и форматирование YAML могут измениться; исходный файл остаётся в резервной копии. Повторный запуск с теми же параметрами не меняет конфигурацию и резервную копию.
+
+Ручная конфигурация Hermes для macOS/Linux:
 
 ```yaml
 mcp_servers:
@@ -200,7 +218,18 @@ mcp_servers:
     enabled: true
 ```
 
-После изменения MCP-конфига перезагрузите MCP в клиенте или начните новую сессию.
+Ручная конфигурация Windows: замените пути на папку проекта и результат команды `(Get-Command uv).Source`. Одинарные кавычки сохраняют обратные слеши Windows в YAML.
+
+```yaml
+mcp_servers:
+  marketplaces:
+    command: 'C:\Tools\uv.exe'
+    args: ['run', '--project', 'C:\src\marketplace-mcp', 'marketplaces-mcp']
+    connect_timeout: 60
+    enabled: true
+```
+
+После изменения конфигурации выполните `/reload-mcp` в Hermes или начните новую сессию.
 
 ## Другие MCP-клиенты
 
