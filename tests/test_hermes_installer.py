@@ -141,11 +141,12 @@ def test_installers_offline_from_another_directory(tmp_path, shell, failure):
            "INSTALLER_TEST_FAILURE": failure}
     name = "shop's server"
     if shell == "bash":
-        env.update(PROJECT_DIR=str(project), SERVER_NAME=name)
+        env.update(PROJECT_DIR=str(project), SERVER_NAME=name, UV_BIN=str(bin_dir / "uv"))
         command = [executable, str(project / "scripts/install-hermes-mcp.sh")]
     else:
         command = [executable, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-                   "-File", str(project / "scripts/install-hermes-mcp.ps1"), "-ServerName", name]
+                   "-File", str(project / "scripts/install-hermes-mcp.ps1"), "-ServerName", name,
+                   "-UvBin", str(bin_dir / "uv.cmd")]
     result = subprocess.run(command, cwd=tmp_path, env=env, capture_output=True, timeout=40)
     if not log.exists():
         pytest.fail(f"Installer exited {result.returncode} before calling uv:\n"
