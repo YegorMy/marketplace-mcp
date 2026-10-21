@@ -14,7 +14,7 @@ def detail():
     return {"url": "https://www.ozon.ru/travel/tours/hotel?" + urlencode({
         "date": "2026-12-19", "nights": 5, "hotelId": 81053,
         "searchRawQuery": urlsplit(URL).query}), "hotel": HOTEL,
-        "detail": (FIXTURES / "ozon_tours_rooms.html").read_text()}
+        "detail": (FIXTURES / "ozon_tours_rooms.html").read_text(encoding="utf-8")}
 
 
 def test_observed_search_contract_preserves_infant_zero():
@@ -26,7 +26,7 @@ def test_observed_search_contract_preserves_infant_zero():
 
 
 def test_search_cards_never_mislabel_breakfast_as_all_inclusive():
-    data = {"url": URL, "html": (FIXTURES / "ozon_tours_search.html").read_text()}
+    data = {"url": URL, "html": (FIXTURES / "ozon_tours_search.html").read_text(encoding="utf-8")}
     offers = parse_leads(data, URL)
     assert len(offers) == 3
     assert all(x["total_price"] is None and x["meal_plan"] is None for x in offers)
