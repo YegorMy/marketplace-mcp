@@ -1,8 +1,8 @@
 """Bounded, shared Ozon tours diagnostics; an accessible page is not a quote."""
 from __future__ import annotations
 
+from contextlib import ExitStack
 import asyncio
-import fcntl
 import json
 import math
 import os
@@ -12,6 +12,8 @@ import tempfile
 import time
 
 from bs4 import BeautifulSoup
+
+from marketplaces_mcp.core.file_lock import exclusive_file_lock
 
 URL = "https://www.ozon.ru/travel/tours/"
 
@@ -75,10 +77,9 @@ class OzonToursAccess:
         if not inspect_tab and (not probe or not prior["retry_allowed"]):
             return {**prior, "cached": True}
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        fd = os.open(str(self.path) + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
-        with os.fdopen(fd, "w") as lock:
+        with ExitStack() as locks:
             try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locks.enter_context(exclusive_file_lock(str(self.path) + ".lock"))
             except BlockingIOError:
                 return {**self.read(), "cached": True, "probe_in_progress": True}
             prior = self.read()
