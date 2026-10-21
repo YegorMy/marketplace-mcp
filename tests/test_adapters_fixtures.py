@@ -872,7 +872,8 @@ def test_avito_ip_block_starts_shared_cooldown(tmp_path, monkeypatch):
     assert calls["count"] == 1
     assert "AVITO_IP_BLOCKED" in first_warnings
     assert second_warnings == ["AVITO_IP_COOLDOWN"]
-    assert os.stat(state_path).st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert os.stat(state_path).st_mode & 0o777 == 0o600
 
 
 def test_avito_state_path_can_live_under_existing_shared_directory(monkeypatch):
@@ -899,7 +900,8 @@ def test_avito_state_path_can_live_under_existing_shared_directory(monkeypatch):
         results, warnings, _ = asyncio.run(run())
         assert results == []
         assert "AVITO_LIVE_NO_RESULTS" in warnings
-        assert os.stat(state_path).st_mode & 0o777 == 0o600
+        if os.name != "nt":
+            assert os.stat(state_path).st_mode & 0o777 == 0o600
     finally:
         for path in (state_path, Path(f"{state_path}.lock")):
             try:

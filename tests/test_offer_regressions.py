@@ -142,9 +142,9 @@ def test_tour_details_respects_existing_captcha_cooldown(tmp_path, monkeypatch):
         raise AssertionError(path)
     async def capture(client, tab_id):
         if tab_id == 'search':
-            return {'url': url, 'html': (fixture_dir / 'ozon_tours_search.html').read_text()}
+            return {'url': url, 'html': (fixture_dir / 'ozon_tours_search.html').read_text(encoding="utf-8")}
         return {'url': details_url, 'hotel': 'Radisson Blu Resort Fujairah',
-                'detail': (fixture_dir / 'ozon_tours_rooms.html').read_text()}
+                'detail': (fixture_dir / 'ozon_tours_rooms.html').read_text(encoding="utf-8")}
     async def guard(client, tab_id):
         return None
     monkeypatch.setattr(adapter, '_request', request)
@@ -365,12 +365,12 @@ def test_tour_successes_validate_against_core_models(monkeypatch, kind):
                            adults=3, child_ages=[0])
     fixtures = Path(__file__).parent / 'fixtures'
     if kind == 'search':
-        offers = parse_leads({'url': url, 'html': (fixtures / 'ozon_tours_search.html').read_text()}, url)
+        offers = parse_leads({'url': url, 'html': (fixtures / 'ozon_tours_search.html').read_text(encoding="utf-8")}, url)
     else:
         detail_url = 'https://www.ozon.ru/travel/tours/hotel?' + urlencode({
             'date': '2026-12-19', 'searchRawQuery': urlsplit(url).query})
         offers = parse_rates({'url': detail_url, 'hotel': 'Radisson Blu Resort Fujairah',
-                              'detail': (fixtures / 'ozon_tours_rooms.html').read_text()},
+                              'detail': (fixtures / 'ozon_tours_rooms.html').read_text(encoding="utf-8")},
                              url, 'Radisson Blu Resort Fujairah')
     async def success(**kwargs):
         return {'source_url': url, 'offers': offers, 'warnings': []}

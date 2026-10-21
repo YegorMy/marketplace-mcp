@@ -1,3 +1,4 @@
+import os
 import asyncio
 from datetime import date
 from urllib.parse import parse_qs
@@ -86,7 +87,8 @@ def test_ozon_access_is_separate_from_search_and_cached_across_instances(tmp_pat
     second = asyncio.run(OzonToursAccess(probe, path).status(probe=True))
     assert first["status"] == "OZON_TOURS_BLOCKED" and first["search_supported"]
     assert second["cached"] and len(calls) == 1
-    assert path.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert path.stat().st_mode & 0o777 == 0o600
 
 
 def test_incidental_block_words_do_not_hide_available_form():

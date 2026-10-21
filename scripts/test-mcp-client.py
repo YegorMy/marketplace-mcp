@@ -128,7 +128,7 @@ async def main() -> None:
                             "flight_result": flight_result.content[0].text[:1000],
                             "hotel_result": hotel_result.content[0].text[:1000],
                         },
-                        ensure_ascii=False,
+                        ensure_ascii=True,
                         indent=2,
                     )
                 )

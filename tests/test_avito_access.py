@@ -319,4 +319,5 @@ def test_ip_and_challenge_have_distinct_reason_and_cooldown(
     assert second == (None, [next_warning])
     assert state["blocked_reason"] == reason
     assert state["block_classifier_version"] == 2
-    assert os.stat(tmp_path / "avito.json").st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert os.stat(tmp_path / "avito.json").st_mode & 0o777 == 0o600
