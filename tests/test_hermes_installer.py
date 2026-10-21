@@ -147,7 +147,10 @@ def test_installers_offline_from_another_directory(tmp_path, shell, failure):
         command = [executable, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                    "-File", str(project / "scripts/install-hermes-mcp.ps1"), "-ServerName", name]
     result = subprocess.run(command, cwd=tmp_path, env=env, capture_output=True, timeout=40)
-    assert log.exists(), (result.returncode, result.stdout, result.stderr)
+    if not log.exists():
+        pytest.fail(f"Installer exited {result.returncode} before calling uv:\n"
+                    + result.stdout.decode(errors="replace")
+                    + result.stderr.decode(errors="replace"))
     calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
     assert calls[0] == ["uv", "sync", "--frozen", "--project", str(project)]
     if failure == "sync":
