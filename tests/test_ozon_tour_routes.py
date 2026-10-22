@@ -26,13 +26,13 @@ def search_url(**changes):
                                               ("140212000", "210915000")])
 def test_quotes_accept_different_routes_without_a_hardcoded_catalogue(origin, destination):
     url = search_url(fromCity=origin, toCountry=destination)
-    leads = parse_leads({"url": url, "html": (FIXTURES / "ozon_tours_search.html").read_text()}, url)
+    leads = parse_leads({"url": url, "html": (FIXTURES / "ozon_tours_search.html").read_text(encoding="utf-8")}, url)
     assert leads and all(lead["total_price"] is None for lead in leads)
     data = {
         "url": "https://www.ozon.ru/travel/tours/hotel?" + urlencode({
             "date": "2026-12-19", "searchRawQuery": urlsplit(url).query}),
         "hotel": "Fixture hotel",
-        "detail": (FIXTURES / "ozon_tours_rooms.html").read_text(),
+        "detail": (FIXTURES / "ozon_tours_rooms.html").read_text(encoding="utf-8"),
     }
     rates = parse_rates(data, url, "Fixture hotel")
     assert rates and rates[0]["total_price"] == 311787
@@ -93,7 +93,7 @@ def test_room_quotes_obey_the_specific_meal_filter_in_the_link():
         "url": "https://www.ozon.ru/travel/tours/hotel?" + urlencode({
             "date": "2026-12-19", "searchRawQuery": urlsplit(url).query}),
         "hotel": "Fixture hotel",
-        "detail": (FIXTURES / "ozon_tours_rooms.html").read_text(),
+        "detail": (FIXTURES / "ozon_tours_rooms.html").read_text(encoding="utf-8"),
     }
     rates = parse_rates(data, url, "Fixture hotel", all_inclusive_only=False)
     assert rates
@@ -173,7 +173,7 @@ def test_generic_url_navigation_keeps_route_and_does_not_visit_unrelated_pages(t
             return {}
         assert path == "/tabs/retained/evaluate"
         if payload["expression"].startswith("(() => ({url:"):
-            return {"result": {"url": current, "html": (FIXTURES / "ozon_tours_search.html").read_text()}}
+            return {"result": {"url": current, "html": (FIXTURES / "ozon_tours_search.html").read_text(encoding="utf-8")}}
         return {"result": {"title": "Туры", "text": "Город вылета Ночей Найти туры"}}
 
     monkeypatch.setattr(adapter, "_request", request)
