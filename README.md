@@ -228,19 +228,37 @@ crashing or fabricating current prices.
 
 ## Hermes setup
 
-The installer writes a `marketplaces` MCP server entry into `~/.hermes/config.yaml` and tests the connection:
+Install `uv` and the Hermes CLI first. The installers add or update only the selected MCP server entry and then run `hermes mcp test`.
+
+macOS / Linux:
 
 ```bash
 bash scripts/install-hermes-mcp.sh
 ```
 
-You can override the MCP server name:
+Windows PowerShell 5.1 or PowerShell 7 (no WSL or Git Bash required):
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-hermes-mcp.ps1
+```
+
+Use `pwsh` instead of `powershell.exe` for PowerShell 7. These options apply to this process only; the installer does not change the machine's execution policy.
+
+You can override the server name, project directory, or uv executable:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-hermes-mcp.ps1 -ServerName marketplaces -ProjectDir 'C:\src\marketplace-mcp' -UvBin 'C:\Tools\uv.exe'
+```
 
 ```bash
 SERVER_NAME=marketplaces bash scripts/install-hermes-mcp.sh
 ```
 
-Manual Hermes config:
+Configuration uses `$HERMES_HOME/config.yaml` when `HERMES_HOME` is set. Otherwise it uses `~/.hermes/config.yaml` on macOS/Linux and `%LOCALAPPDATA%\hermes\config.yaml` on native Windows, following the [Hermes Windows guide](https://hermes-agent.nousresearch.com/docs/user-guide/windows-native). Run Hermes setup first if the config does not exist. For a custom Hermes profile, set `HERMES_HOME` to that profile's directory before running the installer.
+
+Before changing the file, the installer saves `config.yaml.bak`. It preserves other settings and MCP servers. YAML comments and formatting may change; the backup retains the original file. Re-running with the same settings leaves the config and backup unchanged.
+
+Manual Hermes config (macOS/Linux):
 
 ```yaml
 mcp_servers:
@@ -251,7 +269,18 @@ mcp_servers:
     enabled: true
 ```
 
-After changing MCP config, reload MCP in the client or start a new session.
+Manual Windows config: replace the example paths with your checkout and the output of `(Get-Command uv).Source`. Single quotes keep Windows backslashes literal in YAML.
+
+```yaml
+mcp_servers:
+  marketplaces:
+    command: 'C:\Tools\uv.exe'
+    args: ['run', '--project', 'C:\src\marketplace-mcp', 'marketplaces-mcp']
+    connect_timeout: 60
+    enabled: true
+```
+
+After changing MCP config, run `/reload-mcp` in Hermes or start a new session.
 
 ## Other MCP clients
 

@@ -4,9 +4,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import contextmanager
 from datetime import date, timedelta
-import fcntl
 import json
-import os
 import re
 import time
 from urllib.parse import parse_qs, urlencode, urlsplit
@@ -14,6 +12,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 import httpx
 from bs4 import BeautifulSoup
 
+from marketplaces_mcp.core.file_lock import exclusive_file_lock
 from marketplaces_mcp.core.ozon_tours_browser import OzonToursBrowser, USER_ID, _PAGE_EVIDENCE
 
 SEARCH = "https://www.ozon.ru/travel/tours/search"
@@ -207,9 +206,7 @@ class OzonToursAdapter:
     @contextmanager
     def _lock(self):
         self.access.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        fd = os.open(str(self.access.path) + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
-        with os.fdopen(fd, "w") as f:
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with exclusive_file_lock(str(self.access.path) + ".lock"):
             yield
 
     async def _request(self, client, path, payload=None):
