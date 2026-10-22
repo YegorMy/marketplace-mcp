@@ -16,7 +16,10 @@ from marketplaces_mcp.adapters import (
 )
 from marketplaces_mcp.core.ozon_tours_access import OzonToursAccess
 from marketplaces_mcp.core.ozon_tours_browser import OzonToursBrowser
-from marketplaces_mcp.adapters.ozon_tours import OzonToursAdapter, build_search_url, search_context
+from marketplaces_mcp.adapters.ozon_tours import (
+    OzonToursAdapter, TourRouteLookupRequired, build_search_url,
+    canonical_search_url, search_context,
+)
 from marketplaces_mcp.core.artifacts import create_artifact, read_artifact
 from marketplaces_mcp.core.config import get_settings
 from marketplaces_mcp.core.matching import group_product_results
@@ -90,15 +93,18 @@ async def ozon_tours_access_status(probe: bool = False, inspect_tab: bool = Fals
 
 @mcp.tool()
 async def ozon_travel_tours_search(
-    origin: str = "LED", destination: str = "ОАЭ", departure_date: str = "",
-    min_nights: int = 5, max_nights: int = 9, adults: int = 2,
-    child_ages: list[int] | None = None, rooms: int = 1,
-    all_inclusive_only: bool = True, limit: int = 10,
+    origin: str | None = None, destination: str | None = None, departure_date: str | None = None,
+    min_nights: int | None = None, max_nights: int | None = None, adults: int | None = None,
+    child_ages: list[int] | None = None, rooms: int | None = None,
+    all_inclusive_only: bool | None = None, limit: int = 10, search_url: str | None = None,
 ) -> OzonTourResponse:
     """Search actual Ozon package tours in the retained desktop Camofox browser.
 
-    Currently verified LED to UAE, one room. Include infant age 0 in child_ages.
-    One exact departure date and at most five stay lengths (5–9 then 10–12).
+    Pass a complete public Ozon search_url for any departure-city/country route.
+    In URL mode omit all other trip criteria; only limit can accompany the URL.
+    The URL supplies dates, guests and meal filters. Name lookup currently knows
+    LED to UAE only; other names require a search link, never guessed location IDs.
+    One room and at most five stay lengths (e.g. 5–9) per call. Child age 0 is an infant.
     Returns hotel leads, never treats search-card prices as matching meal prices.
     Call ozon_travel_tour_details for serious candidates. No booking or payment.
     """
@@ -107,12 +113,26 @@ async def ozon_travel_tours_search(
         min_nights=min_nights, max_nights=max_nights, adults=adults,
         child_ages=child_ages, rooms=rooms, all_inclusive_only=all_inclusive_only,
     )
+    supplied = {key: value for key, value in kwargs.items() if value is not None}
     try:
-        source_url = build_search_url(**kwargs)
+        if search_url is not None:
+            if supplied:
+                raise ValueError("A search URL cannot be combined with separate trip criteria")
+            source_url = canonical_search_url(search_url)
+            return await _call_tour_tool(
+                _ozon_package_adapter.search_by_url(search_url=source_url, limit=limit),
+                source_url=source_url, timeout=150,
+            )
+        source_url = build_search_url(**supplied)
+    except TourRouteLookupRequired:
+        return OzonTourResponse(source_url="https://www.ozon.ru/travel/tours/",
+                                warnings=["OZON_TOURS_ROUTE_LOOKUP_REQUIRED"],
+                                note="Choose the route in Ozon's public search form and pass its complete search_url. Automatic lookup for additional names is not yet available.")
     except ValueError:
         return OzonTourResponse(source_url="https://www.ozon.ru/travel/tours/",
-                                warnings=["INVALID_TOUR_REQUEST"])
-    return await _call_tour_tool(_ozon_package_adapter.search(**kwargs, limit=limit),
+                                warnings=["INVALID_TOUR_REQUEST"],
+                                note="Use either a complete Ozon search URL or separate trip criteria, with one room and at most five stay lengths.")
+    return await _call_tour_tool(_ozon_package_adapter.search(**supplied, limit=limit),
                                 source_url=source_url, timeout=150)
 
 

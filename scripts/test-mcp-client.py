@@ -111,6 +111,7 @@ async def main() -> None:
                 assert not any(result.isError for result in (result, flight_result, hotel_result))
                 for tool_name, arguments in (
                     ("ozon_travel_tours_search", {"departure_date": "not-a-date"}),
+                    ("ozon_travel_tours_search", {"search_url": "https://www.ozon.ru/travel/tours/search?fromCity=100001"}),
                     ("ozon_travel_tour_details", {"search_url": "invalid", "hotel_name": "Fixture"}),
                 ):
                     rejected = await session.call_tool(tool_name, arguments)

@@ -169,8 +169,8 @@ class OzonTravelAdapter(BaseAdapter):
             return [], sorted(set(warnings)), source_url
 
         discovered, discovery_warnings = await self._discover_flight_route(
-            origin,
-            destination,
+            origin_code or origin,
+            destination_code or destination,
             parsed_departure,
             parsed_return,
             limit=limit,
@@ -681,7 +681,9 @@ class OzonTravelAdapter(BaseAdapter):
         if html and not self._is_blocked(html):
             return html, warnings
         if html:
-            warnings.append("HIVE_WEB_BLOCKED")
+            return None, sorted(set(warnings + ["HIVE_WEB_BLOCKED", "CAPTCHA_OR_BLOCKED"]))
+        if "CAPTCHA_OR_BLOCKED" in warnings:
+            return None, warnings
         if self.settings.camofox_url:
             try:
                 snapshot = await self._fetch_with_camofox(url)
@@ -794,13 +796,24 @@ class OzonTravelAdapter(BaseAdapter):
             max(_bounded_limit(limit) * 2, 8),
         )
         results: list[FlightOffer] = []
+        excluded = False
         for hit in hits:
             raw_url = str(hit.get("href") or hit.get("url") or "")
-            parsed = urlsplit(raw_url)
-            if (
-                not parsed.netloc.endswith("ozon.ru")
-                or "/travel/flight/" not in parsed.path
-            ):
+            try:
+                parsed = urlsplit(raw_url)
+            except ValueError:
+                excluded = True
+                continue
+            route = re.match(
+                r"^/travel/flight/[^/]+-([a-z]{3})/[^/]+-([a-z]{3})(?:/|$)",
+                parsed.path, flags=re.IGNORECASE,
+            )
+            # An indexed city, country or different-airport route cannot prove
+            # the requested endpoints. Keep these links price-less even when matched.
+            if (parsed.scheme != "https" or parsed.netloc not in {"ozon.ru", "www.ozon.ru"}
+                    or route is None
+                    or tuple(code.upper() for code in route.groups()) != (origin.upper(), destination.upper())):
+                excluded = True
                 continue
             results.append(
                 FlightOffer(
@@ -819,6 +832,8 @@ class OzonTravelAdapter(BaseAdapter):
             )
             break
         warnings = [warning] if warning else []
+        if excluded:
+            warnings.append("INDEX_ROUTE_UNVERIFIED")
         if results:
             warnings.extend(
                 [
